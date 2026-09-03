@@ -1,0 +1,22 @@
+services:
+  worker:
+    deploy:
+      replicas: 0
+  protocol-worker:
+    build: ./backend/protocol-worker
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      API_BASE_URL: ${PROTOCOL_API_BASE_URL:-http://host.docker.internal:28080}
+      WORKER_API_TOKEN: ${WORKER_API_TOKEN:-dev-worker-token}
+      REDIS_URL: redis://redis:6379/0
+      QUEUE_NAME: ${QUEUE_NAME:-recharge:tasks}
+      WORKER_ID: protocol-1
+      PROXY: ${PROXY:-}
+      PAYMENT_TEST_MODE: ${PAYMENT_TEST_MODE:-}
+      PROTOCOL_DEBUG: ${PROTOCOL_DEBUG:-0}
+      PROTOCOL_PAUSE_BEFORE_SUBMIT: ${PROTOCOL_PAUSE_BEFORE_SUBMIT:-0}

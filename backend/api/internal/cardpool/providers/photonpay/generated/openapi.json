@@ -1,0 +1,248 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "PhotonPay Issuing Adapter API",
+    "version": "2026-08-06",
+    "description": "Provider adapter subset derived from the official PhotonPay Open API reference."
+  },
+  "servers": [
+    { "url": "https://x-api.sandbox.photontech.cc" },
+    { "url": "https://x-api.photonpay.com" }
+  ],
+  "paths": {
+    "/oauth2/token/accessToken": {
+      "post": {
+        "operationId": "GenerateAccessToken",
+        "responses": {
+          "200": {
+            "description": "Access token response",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericObject" } } }
+          },
+          "default": { "$ref": "#/components/responses/ProviderError" }
+        }
+      }
+    },
+    "/vcc/openApi/v4/openCard": {
+      "post": {
+        "operationId": "OpenCard",
+        "parameters": [
+          { "$ref": "#/components/parameters/PDSign" },
+          { "$ref": "#/components/parameters/PDToken" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OpenCardRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Open card response",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericObject" } } }
+          },
+          "default": { "$ref": "#/components/responses/ProviderError" }
+        }
+      }
+    },
+    "/vcc/openApi/v4/getCardDetail": {
+      "get": {
+        "operationId": "GetCardDetail",
+        "parameters": [
+          { "$ref": "#/components/parameters/PDToken" },
+          { "name": "cardId", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Card detail response",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericObject" } } }
+          },
+          "default": { "$ref": "#/components/responses/ProviderError" }
+        }
+      }
+    },
+    "/vcc/openApi/v4/getCvv": {
+      "get": {
+        "operationId": "GetCvv",
+        "parameters": [
+          { "$ref": "#/components/parameters/PDToken" },
+          { "name": "cardId", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "CVV response",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericObject" } } }
+          },
+          "default": { "$ref": "#/components/responses/ProviderError" }
+        }
+      }
+    },
+    "/vcc/openApi/v4/freezeCard": {
+      "post": {
+        "operationId": "FreezeCard",
+        "parameters": [
+          { "$ref": "#/components/parameters/PDSign" },
+          { "$ref": "#/components/parameters/PDToken" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FreezeCardRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Freeze response",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericObject" } } }
+          },
+          "default": { "$ref": "#/components/responses/ProviderError" }
+        }
+      }
+    },
+    "/vcc/openApi/v4/cancelCard": {
+      "post": {
+        "operationId": "CancelCard",
+        "parameters": [
+          { "$ref": "#/components/parameters/PDSign" },
+          { "$ref": "#/components/parameters/PDToken" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CancelCardRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Cancel response",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericObject" } } }
+          },
+          "default": { "$ref": "#/components/responses/ProviderError" }
+        }
+      }
+    },
+    "/vcc/openApi/v4/updateCard": {
+      "post": {
+        "operationId": "UpdateCard",
+        "parameters": [
+          { "$ref": "#/components/parameters/PDSign" },
+          { "$ref": "#/components/parameters/PDToken" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateCardRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Update card response",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericObject" } } }
+          },
+          "default": { "$ref": "#/components/responses/ProviderError" }
+        }
+      }
+    },
+    "/vcc/openApi/v4/pagingVccCard": {
+      "get": {
+        "operationId": "ListCards",
+        "parameters": [
+          { "$ref": "#/components/parameters/PDToken" },
+          { "name": "pageIndex", "in": "query", "schema": { "type": "integer", "format": "int64" } },
+          { "name": "pageSize", "in": "query", "schema": { "type": "integer", "format": "int64" } },
+          { "name": "cardId", "in": "query", "schema": { "type": "string" } },
+          { "name": "cardStatus", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Card list response",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericObject" } } }
+          },
+          "default": { "$ref": "#/components/responses/ProviderError" }
+        }
+      }
+    },
+    "/vcc/openApi/v4/pagingVccTradeOrder": {
+      "get": {
+        "operationId": "ListTradeOrders",
+        "parameters": [
+          { "$ref": "#/components/parameters/PDToken" },
+          { "name": "pageIndex", "in": "query", "schema": { "type": "integer", "format": "int64" } },
+          { "name": "pageSize", "in": "query", "schema": { "type": "integer", "format": "int64" } },
+          { "name": "cardId", "in": "query", "schema": { "type": "string" } },
+          { "name": "transactionId", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Trade order response",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericObject" } } }
+          },
+          "default": { "$ref": "#/components/responses/ProviderError" }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "PDSign": { "name": "X-PD-SIGN", "in": "header", "required": true, "schema": { "type": "string" } },
+      "PDToken": { "name": "X-PD-TOKEN", "in": "header", "required": true, "schema": { "type": "string" } }
+    },
+    "responses": {
+      "ProviderError": {
+        "description": "Provider error",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericObject" } } }
+      }
+    },
+    "schemas": {
+      "GenericObject": { "type": "object", "additionalProperties": true },
+      "OpenCardRequest": {
+        "type": "object",
+        "required": ["requestId", "cardType", "cardCurrency", "cardBin"],
+        "properties": {
+          "requestId": { "type": "string" },
+          "memberId": { "type": "string" },
+          "matrixAccount": { "type": "string" },
+          "cardBin": { "type": "string" },
+          "cardCurrency": { "type": "string" },
+          "cardScheme": { "type": "string" },
+          "cardType": { "type": "string" },
+          "cardFormFactor": { "type": "string" },
+          "cardholderId": { "type": "string" },
+          "cardDesignId": { "type": "string" },
+          "cardLogoId": { "type": "string" },
+          "maxOnDaily": { "type": "number" },
+          "maxOnMonthly": { "type": "number" },
+          "maxOnPercent": { "type": "number" },
+          "rechargeAmount": { "type": "number" },
+          "transactionLimit": { "type": "number" },
+          "transactionLimitType": { "type": "string" },
+          "accountId": { "type": "string" },
+          "arrivalAmount": { "type": "number" },
+          "recipientId": { "type": "string" },
+          "nickname": { "type": "string" }
+        }
+      },
+      "FreezeCardRequest": {
+        "type": "object",
+        "required": ["requestId", "cardId", "status"],
+        "properties": {
+          "requestId": { "type": "string" },
+          "cardId": { "type": "string" },
+          "status": { "type": "string" }
+        }
+      },
+      "CancelCardRequest": {
+        "type": "object",
+        "required": ["cardId"],
+        "properties": { "cardId": { "type": "string" } }
+      },
+      "UpdateCardRequest": {
+        "type": "object",
+        "required": ["cardId", "requestId"],
+        "properties": {
+          "cardId": { "type": "string" },
+          "requestId": { "type": "string" },
+          "cardFormFactor": { "type": "string" },
+          "maxOnDaily": { "type": "number" },
+          "maxOnMonthly": { "type": "number" },
+          "maxOnPercent": { "type": "number" },
+          "nickname": { "type": "string" },
+          "transactionLimit": { "type": "number" },
+          "transactionLimitChangeType": { "type": "string" },
+          "transactionLimitType": { "type": "string" }
+        }
+      }
+    }
+  }
+}

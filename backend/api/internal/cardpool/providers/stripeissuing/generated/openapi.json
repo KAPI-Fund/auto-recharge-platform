@@ -1,0 +1,65 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Stripe Issuing Adapter API",
+    "version": "2026-08-28",
+    "description": "Generated-client subset of Stripe's official OpenAPI specification, limited to Issuing card, authorization, and transaction operations. Source: https://github.com/stripe/openapi"
+  },
+  "servers": [{ "url": "https://api.stripe.com" }],
+  "paths": {
+    "/v1/issuing/cards": {
+      "post": {
+        "operationId": "CreateIssuingCard",
+        "requestBody": { "required": true, "content": { "application/x-www-form-urlencoded": { "schema": { "$ref": "#/components/schemas/CreateCardRequest" } } } },
+        "responses": { "200": { "description": "Issuing card", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IssuingCard" } } } }, "default": { "$ref": "#/components/responses/ProviderError" } }
+      },
+      "get": {
+        "operationId": "ListIssuingCards",
+        "parameters": [{ "name": "cardholder", "in": "query", "schema": { "type": "string" } }, { "name": "limit", "in": "query", "schema": { "type": "integer" } }, { "name": "status", "in": "query", "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Issuing cards", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IssuingCardList" } } } }, "default": { "$ref": "#/components/responses/ProviderError" } }
+      }
+    },
+    "/v1/issuing/cards/{card}": {
+      "get": {
+        "operationId": "GetIssuingCard",
+        "parameters": [{ "$ref": "#/components/parameters/CardID" }],
+        "responses": { "200": { "description": "Issuing card", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IssuingCard" } } } }, "default": { "$ref": "#/components/responses/ProviderError" } }
+      },
+      "post": {
+        "operationId": "UpdateIssuingCard",
+        "parameters": [{ "$ref": "#/components/parameters/CardID" }],
+        "requestBody": { "required": false, "content": { "application/x-www-form-urlencoded": { "schema": { "$ref": "#/components/schemas/UpdateCardRequest" } } } },
+        "responses": { "200": { "description": "Issuing card", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IssuingCard" } } } }, "default": { "$ref": "#/components/responses/ProviderError" } }
+      }
+    },
+    "/v1/issuing/transactions": {
+      "get": {
+        "operationId": "ListIssuingTransactions",
+        "parameters": [{ "name": "card", "in": "query", "schema": { "type": "string" } }, { "name": "limit", "in": "query", "schema": { "type": "integer" } }],
+        "responses": { "200": { "description": "Issuing transactions", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IssuingTransactionList" } } } }, "default": { "$ref": "#/components/responses/ProviderError" } }
+      }
+    },
+    "/v1/issuing/authorizations": {
+      "get": {
+        "operationId": "ListIssuingAuthorizations",
+        "parameters": [{ "name": "card", "in": "query", "schema": { "type": "string" } }, { "name": "limit", "in": "query", "schema": { "type": "integer" } }],
+        "responses": { "200": { "description": "Issuing authorizations", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IssuingAuthorizationList" } } } }, "default": { "$ref": "#/components/responses/ProviderError" } }
+      }
+    }
+  },
+  "components": {
+    "parameters": { "CardID": { "name": "card", "in": "path", "required": true, "schema": { "type": "string" } } },
+    "responses": { "ProviderError": { "description": "Stripe API error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericObject" } } } } },
+    "schemas": {
+      "GenericObject": { "type": "object", "additionalProperties": true },
+      "CreateCardRequest": { "type": "object", "required": ["cardholder", "currency", "type"], "properties": { "cardholder": { "type": "string" }, "currency": { "type": "string" }, "type": { "type": "string", "enum": ["virtual", "physical"] }, "status": { "type": "string", "enum": ["active", "inactive"] }, "metadata": { "type": "object", "additionalProperties": { "type": "string" } } } },
+      "UpdateCardRequest": { "type": "object", "properties": { "status": { "type": "string", "enum": ["active", "inactive", "canceled"] }, "cancellation_reason": { "type": "string", "enum": ["lost", "stolen"] }, "metadata": { "type": "object", "additionalProperties": { "type": "string" } } } },
+      "IssuingCard": { "type": "object", "properties": { "id": { "type": "string" }, "object": { "type": "string" }, "cardholder": { "type": "string" }, "currency": { "type": "string" }, "type": { "type": "string" }, "status": { "type": "string" }, "last4": { "type": "string" }, "created": { "type": "integer" }, "number": { "type": "string", "format": "password" }, "cvc": { "type": "string", "format": "password" }, "exp_month": { "type": "integer" }, "exp_year": { "type": "integer" }, "metadata": { "type": "object", "additionalProperties": { "type": "string" } } }, "additionalProperties": true },
+      "IssuingCardList": { "type": "object", "properties": { "object": { "type": "string" }, "data": { "type": "array", "items": { "$ref": "#/components/schemas/IssuingCard" } }, "has_more": { "type": "boolean" }, "url": { "type": "string" } }, "additionalProperties": true },
+      "IssuingTransaction": { "type": "object", "properties": { "id": { "type": "string" }, "card": { "type": "string" }, "amount": { "type": "integer" }, "currency": { "type": "string" }, "status": { "type": "string" }, "type": { "type": "string" }, "created": { "type": "integer" }, "merchant_data": { "type": "object", "additionalProperties": true }, "failure_code": { "type": "string" } }, "additionalProperties": true },
+      "IssuingTransactionList": { "type": "object", "properties": { "object": { "type": "string" }, "data": { "type": "array", "items": { "$ref": "#/components/schemas/IssuingTransaction" } }, "has_more": { "type": "boolean" }, "url": { "type": "string" } }, "additionalProperties": true },
+      "IssuingAuthorization": { "type": "object", "properties": { "id": { "type": "string" }, "card": { "type": "string" }, "amount": { "type": "integer" }, "currency": { "type": "string" }, "status": { "type": "string" }, "created": { "type": "integer" }, "merchant_data": { "type": "object", "additionalProperties": true }, "failure_code": { "type": "string" } }, "additionalProperties": true },
+      "IssuingAuthorizationList": { "type": "object", "properties": { "object": { "type": "string" }, "data": { "type": "array", "items": { "$ref": "#/components/schemas/IssuingAuthorization" } }, "has_more": { "type": "boolean" }, "url": { "type": "string" } }, "additionalProperties": true }
+    }
+  }
+}

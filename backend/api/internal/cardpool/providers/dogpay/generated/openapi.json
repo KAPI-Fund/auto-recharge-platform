@@ -1,0 +1,241 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "DogPay Card Issuing Adapter API",
+    "version": "2026-07-14",
+    "description": "Provider adapter subset derived from DogPay CaaS Card Issuing API definitions."
+  },
+  "servers": [
+    { "url": "https://sandbox-api-v2.dogpay.com" },
+    { "url": "https://api.dogpay.com" }
+  ],
+  "paths": {
+    "/open-api/v1/auth/access_token": {
+      "post": {
+        "operationId": "GetAccessToken",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Access token response",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericObject" } } }
+          },
+          "default": { "$ref": "#/components/responses/ProviderError" }
+        }
+      }
+    },
+    "/open-api/v1/cards": {
+      "post": {
+        "operationId": "CreateCard",
+        "parameters": [ { "$ref": "#/components/parameters/EntityID" } ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateCardRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Create card response",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericObject" } } }
+          },
+          "default": { "$ref": "#/components/responses/ProviderError" }
+        }
+      },
+      "get": {
+        "operationId": "ListCards",
+        "parameters": [
+          { "$ref": "#/components/parameters/EntityID" },
+          { "name": "page", "in": "query", "schema": { "type": "integer" } },
+          { "name": "take", "in": "query", "schema": { "type": "integer" } },
+          { "name": "cardId", "in": "query", "schema": { "type": "string" } },
+          { "name": "cardholderId", "in": "query", "schema": { "type": "string" } },
+          { "name": "lastFour", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Card list response",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericObject" } } }
+          },
+          "default": { "$ref": "#/components/responses/ProviderError" }
+        }
+      },
+      "delete": {
+        "operationId": "DeleteCard",
+        "parameters": [ { "$ref": "#/components/parameters/EntityID" } ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CardIDRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Delete response",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericObject" } } }
+          },
+          "default": { "$ref": "#/components/responses/ProviderError" }
+        }
+      }
+    },
+    "/open-api/v1/cards/private-info": {
+      "get": {
+        "operationId": "GetCardPrivateInfo",
+        "parameters": [
+          { "$ref": "#/components/parameters/EntityID" },
+          { "name": "cardId", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Private card response",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericObject" } } }
+          },
+          "default": { "$ref": "#/components/responses/ProviderError" }
+        }
+      }
+    },
+    "/open-api/v1/cards/frozen": {
+      "put": {
+        "operationId": "FreezeCard",
+        "parameters": [ { "$ref": "#/components/parameters/EntityID" } ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CardIDRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Freeze response",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericObject" } } }
+          },
+          "default": { "$ref": "#/components/responses/ProviderError" }
+        }
+      }
+    },
+    "/open-api/v1/cards/unfrozen": {
+      "put": {
+        "operationId": "UnfreezeCard",
+        "parameters": [ { "$ref": "#/components/parameters/EntityID" } ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CardIDRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Unfreeze response",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericObject" } } }
+          },
+          "default": { "$ref": "#/components/responses/ProviderError" }
+        }
+      }
+    },
+    "/open-api/v1/cards/spending/limit": {
+      "get": {
+        "operationId": "GetSpendingLimit",
+        "parameters": [
+          { "$ref": "#/components/parameters/EntityID" },
+          { "name": "cardId", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Spending limit response",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericObject" } } }
+          },
+          "default": { "$ref": "#/components/responses/ProviderError" }
+        }
+      },
+      "put": {
+        "operationId": "UpdateSpendingLimit",
+        "parameters": [ { "$ref": "#/components/parameters/EntityID" } ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SpendingLimitRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Spending limit update response",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericObject" } } }
+          },
+          "default": { "$ref": "#/components/responses/ProviderError" }
+        }
+      }
+    },
+    "/open-api/v1/cards/transactions": {
+      "get": {
+        "operationId": "ListTransactions",
+        "parameters": [
+          { "$ref": "#/components/parameters/EntityID" },
+          { "name": "page", "in": "query", "schema": { "type": "integer" } },
+          { "name": "take", "in": "query", "schema": { "type": "integer" } },
+          { "name": "cardId", "in": "query", "schema": { "type": "string" } },
+          { "name": "id", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transaction response",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericObject" } } }
+          },
+          "default": { "$ref": "#/components/responses/ProviderError" }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "EntityID": { "name": "dgp-entity-id", "in": "header", "required": false, "schema": { "type": "string" } }
+    },
+    "responses": {
+      "ProviderError": {
+        "description": "Provider error",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericObject" } } }
+      }
+    },
+    "schemas": {
+      "GenericObject": { "type": "object", "additionalProperties": true },
+      "AuthRequest": {
+        "type": "object",
+        "required": ["grant_type", "appid", "secret"],
+        "properties": {
+          "grant_type": { "type": "string" },
+          "appid": { "type": "string" },
+          "secret": { "type": "string", "format": "password" }
+        }
+      },
+      "CardOptions": {
+        "type": "object",
+        "required": ["callId", "cardHolderId"],
+        "properties": {
+          "callId": { "type": "string" },
+          "cardHolderId": { "type": "string" },
+          "label": { "type": "string" },
+          "amount": { "type": "number" },
+          "velocityAmountLimit": { "type": "number" }
+        }
+      },
+      "CreateCardRequest": {
+        "type": "object",
+        "required": ["channelId", "cardType", "cardOptions"],
+        "properties": {
+          "channelId": { "type": "string" },
+          "cardType": { "type": "string" },
+          "cardOptions": { "$ref": "#/components/schemas/CardOptions" },
+          "budgetId": { "type": "string" }
+        }
+      },
+      "CardIDRequest": {
+        "type": "object",
+        "required": ["cardId"],
+        "properties": { "cardId": { "type": "string" } }
+      },
+      "SpendingLimitRequest": {
+        "type": "object",
+        "required": ["cardId"],
+        "properties": {
+          "cardId": { "type": "string" },
+          "velocityAmountLimit": { "type": "number" },
+          "singleAmountLimit": { "type": "number" },
+          "dayAmountLimit": { "type": "number" },
+          "weekAmountLimit": { "type": "number" },
+          "monthAmountLimit": { "type": "number" }
+        }
+      }
+    }
+  }
+}

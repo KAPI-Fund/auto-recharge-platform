@@ -1,0 +1,61 @@
+# Dependencies and package-manager caches
+node_modules/
+.yarn/
+.npm/
+.pnpm-store/
+
+# Frontend build output and local caches
+.next/
+.next.stale*/
+frontend/.next-stale*/
+out/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+.eslintcache
+.turbo/
+
+# Local configuration and secrets. The example files are intentionally tracked.
+.env
+.env.*
+!.env.example
+!.env.production.example
+
+# Runtime state, browser profiles, screenshots, recordings and debug captures
+runtime/
+**/runtime/
+captures/
+**/captures/
+screenshots/
+**/screenshots/
+videos/
+**/videos/
+recordings/
+**/recordings/
+backend/worker/src/legacy/debug_screenshots/
+design-reference/
+design-qa/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*.pid
+*.sock
+*.har
+
+# Local databases and generated exports
+*.sqlite
+*.sqlite3
+*.db
+*.csv
+
+# OS and editor files
+.DS_Store
+._*
+.idea/
+.vscode/

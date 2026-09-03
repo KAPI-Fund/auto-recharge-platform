@@ -1,0 +1,174 @@
+name: kc-recharge-platform
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-recharge}
+      POSTGRES_USER: ${POSTGRES_USER:-recharge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-recharge}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-recharge} -d ${POSTGRES_DB:-recharge}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  api:
+    build: ./backend/api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      HTTP_ADDR: ":8080"
+      DATABASE_URL: postgres://${POSTGRES_USER:-recharge}:${POSTGRES_PASSWORD:-recharge}@postgres:5432/${POSTGRES_DB:-recharge}?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      QUEUE_NAME: ${QUEUE_NAME:-recharge:tasks}
+      ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:-dev-admin-token}
+      WORKER_API_TOKEN: ${WORKER_API_TOKEN:-dev-worker-token}
+      SESSION_ENCRYPTION_KEY: ${SESSION_ENCRYPTION_KEY:-change-this-session-key}
+      SESSION_ENCRYPTION_KEY_FALLBACKS: ${SESSION_ENCRYPTION_KEY_FALLBACKS:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+      ADMIN_SECONDARY_PASSWORD: ${ADMIN_SECONDARY_PASSWORD:-admin123}
+      CORS_ORIGINS: http://localhost:3000
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:23000}
+      STORE_DEBUG_MODE: ${STORE_DEBUG_MODE:-1}
+      RECHARGE_QUEUED_TIMEOUT_SECONDS: ${RECHARGE_QUEUED_TIMEOUT_SECONDS:-600}
+      RECHARGE_TASK_LEASE_TIMEOUT_SECONDS: ${RECHARGE_TASK_LEASE_TIMEOUT_SECONDS:-60}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_API_BASE_URL: ${STRIPE_API_BASE_URL:-https://api.stripe.com}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_SUCCESS_URL: ${STRIPE_SUCCESS_URL:-http://localhost:23000/recharge}
+      STRIPE_CANCEL_URL: ${STRIPE_CANCEL_URL:-http://localhost:23000/recharge}
+      EMAIL_ENABLED: ${EMAIL_ENABLED:-false}
+      EMAIL_NOTIFY_PURCHASE: ${EMAIL_NOTIFY_PURCHASE:-true}
+      EMAIL_NOTIFY_REDEEM: ${EMAIL_NOTIFY_REDEEM:-true}
+      EMAIL_SITE_NAME: ${EMAIL_SITE_NAME:-KC GPT自动充值系统}
+      EMAIL_SMTP_HOST: ${EMAIL_SMTP_HOST:-}
+      EMAIL_SMTP_PORT: ${EMAIL_SMTP_PORT:-587}
+      EMAIL_SMTP_USERNAME: ${EMAIL_SMTP_USERNAME:-}
+      EMAIL_SMTP_PASSWORD: ${EMAIL_SMTP_PASSWORD:-}
+      EMAIL_SMTP_FROM: ${EMAIL_SMTP_FROM:-}
+      EMAIL_SMTP_FROM_NAME: ${EMAIL_SMTP_FROM_NAME:-KC GPT自动充值系统}
+      EMAIL_SMTP_USE_TLS: ${EMAIL_SMTP_USE_TLS:-true}
+      EMAIL_SMTP_TIMEOUT_SECONDS: ${EMAIL_SMTP_TIMEOUT_SECONDS:-10}
+      DEFAULT_RECHARGE_MODE: ${DEFAULT_RECHARGE_MODE:-browser}
+      UPSTREAM_BASE_URL: ${UPSTREAM_BASE_URL:-}
+      UPSTREAM_CREATE_PATH: ${UPSTREAM_CREATE_PATH:-/pay}
+      UPSTREAM_STATUS_PATH: ${UPSTREAM_STATUS_PATH:-/tasks/:id}
+      BROWSER_CHECKOUT_URL: ${BROWSER_CHECKOUT_URL:-}
+      BROWSER_HEADLESS: ${BROWSER_HEADLESS:-1}
+      PROXY: ${PROXY:-}
+      RUNTIME_DIR: /app/runtime
+      HCAPTCHA_SOLVER_ENABLED: ${HCAPTCHA_SOLVER_ENABLED:-1}
+      HCAPTCHA_VLM_API_KEY: ${HCAPTCHA_VLM_API_KEY:-}
+      HCAPTCHA_VLM_BASE_URL: ${HCAPTCHA_VLM_BASE_URL:-https://api.openai.com/v1}
+      HCAPTCHA_VLM_MODEL: ${HCAPTCHA_VLM_MODEL:-gpt-5.5}
+      HCAPTCHA_VLM_TIMEOUT: ${HCAPTCHA_VLM_TIMEOUT:-45}
+      HCAPTCHA_SOLVER_TIMEOUT: ${HCAPTCHA_SOLVER_TIMEOUT:-240}
+      HCAPTCHA_SOLVER_NO_VLM: ${HCAPTCHA_SOLVER_NO_VLM:-0}
+      HCAPTCHA_CDP_PORT: ${HCAPTCHA_CDP_PORT:-9222}
+      HCAPTCHA_CAPTCHA_PLATFORM_API_KEY: ${HCAPTCHA_CAPTCHA_PLATFORM_API_KEY:-}
+      HCAPTCHA_CAPTCHA_PLATFORM_API_URL: ${HCAPTCHA_CAPTCHA_PLATFORM_API_URL:-https://api.capsolver.com}
+      HCAPTCHA_CAPTCHA_PLATFORM_TIMEOUT: ${HCAPTCHA_CAPTCHA_PLATFORM_TIMEOUT:-180}
+      POOL_EMAIL_IMAP_HOST: ${POOL_EMAIL_IMAP_HOST:-outlook.office365.com}
+      POOL_EMAIL_IMAP_PORT: ${POOL_EMAIL_IMAP_PORT:-993}
+      POOL_EMAIL_INCLUDE_JUNK: ${POOL_EMAIL_INCLUDE_JUNK:-1}
+      BROWSER_POOL_CONTROL_URL: http://worker:8091
+      BROWSER_POOL_CONTROL_TOKEN: ${WORKER_API_TOKEN:-dev-worker-token}
+    ports:
+      - "${API_PORT:-8080}:8080"
+    volumes:
+      - ./runtime:/app/runtime
+
+  worker:
+    build: ./backend/worker
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    environment:
+      API_BASE_URL: http://api:8080
+      WORKER_API_TOKEN: ${WORKER_API_TOKEN:-dev-worker-token}
+      REDIS_URL: redis://redis:6379/0
+      QUEUE_NAME: ${QUEUE_NAME:-recharge:tasks}
+      WORKER_ID: ${WORKER_ID:-worker-1}
+      UPSTREAM_BASE_URL: ${UPSTREAM_BASE_URL:-}
+      UPSTREAM_API_KEY: ${UPSTREAM_API_KEY:-}
+      UPSTREAM_CREATE_PATH: ${UPSTREAM_CREATE_PATH:-/pay}
+      UPSTREAM_STATUS_PATH: ${UPSTREAM_STATUS_PATH:-/tasks/:id}
+      UPSTREAM_POLL_INTERVAL_MS: ${UPSTREAM_POLL_INTERVAL_MS:-3000}
+      UPSTREAM_POLL_ATTEMPTS: ${UPSTREAM_POLL_ATTEMPTS:-40}
+      BROWSER_CHECKOUT_URL: ${BROWSER_CHECKOUT_URL:-}
+      BROWSER_HEADLESS: ${BROWSER_HEADLESS:-1}
+      LEGACY_HEADFUL: ${LEGACY_HEADFUL:-0}
+      CHROMIUM_CHANNEL: ${CHROMIUM_CHANNEL:-}
+      CHECKOUT_MODE: ${CHECKOUT_MODE:-api}
+      PAYMENT_TEST_MODE: ${PAYMENT_TEST_MODE:-}
+      LEGACY_MAX_ATTEMPTS: ${LEGACY_MAX_ATTEMPTS:-3}
+      LEGACY_PROCESS_TIMEOUT_MS: ${LEGACY_PROCESS_TIMEOUT_MS:-900000}
+      RUNTIME_DIR: /app/runtime
+      HCAPTCHA_SOLVER_ENABLED: ${HCAPTCHA_SOLVER_ENABLED:-1}
+      HCAPTCHA_VLM_API_KEY: ${HCAPTCHA_VLM_API_KEY:-}
+      HCAPTCHA_VLM_BASE_URL: ${HCAPTCHA_VLM_BASE_URL:-https://api.openai.com/v1}
+      HCAPTCHA_VLM_MODEL: ${HCAPTCHA_VLM_MODEL:-gpt-5.5}
+      HCAPTCHA_VLM_TIMEOUT: ${HCAPTCHA_VLM_TIMEOUT:-45}
+      HCAPTCHA_SOLVER_TIMEOUT: ${HCAPTCHA_SOLVER_TIMEOUT:-240}
+      HCAPTCHA_SOLVER_NO_VLM: ${HCAPTCHA_SOLVER_NO_VLM:-0}
+      HCAPTCHA_CDP_PORT: ${HCAPTCHA_CDP_PORT:-9222}
+      HCAPTCHA_CAPTCHA_PLATFORM_API_KEY: ${HCAPTCHA_CAPTCHA_PLATFORM_API_KEY:-}
+      HCAPTCHA_CAPTCHA_PLATFORM_API_URL: ${HCAPTCHA_CAPTCHA_PLATFORM_API_URL:-https://api.capsolver.com}
+      HCAPTCHA_CAPTCHA_PLATFORM_TIMEOUT: ${HCAPTCHA_CAPTCHA_PLATFORM_TIMEOUT:-180}
+      POOL_EMAIL_IMAP_HOST: ${POOL_EMAIL_IMAP_HOST:-outlook.office365.com}
+      POOL_EMAIL_IMAP_PORT: ${POOL_EMAIL_IMAP_PORT:-993}
+      POOL_EMAIL_INCLUDE_JUNK: ${POOL_EMAIL_INCLUDE_JUNK:-1}
+      BROWSER_SCREENSHOT_DIR: /app/runtime/screenshots
+      BROWSER_POOL: ${BROWSER_POOL:-1}
+      BROWSER_POOL_SIZE: ${BROWSER_POOL_SIZE:-2}
+      BROWSER_POOL_BASE_PORT: ${BROWSER_POOL_BASE_PORT:-19222}
+      BROWSER_POOL_CONTROL_PORT: 8091
+    volumes:
+      - ./runtime:/app/runtime
+    shm_size: "1gb"
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        API_INTERNAL_URL: ${API_INTERNAL_URL:-http://api:8080}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      API_INTERNAL_URL: http://api:8080
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -1,0 +1,120 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Airwallex Issuing Adapter API",
+    "version": "2026-08-21",
+    "description": "Minimal generated-client surface derived from the official Airwallex Client API reference. Source: https://www.airwallex.com/docs/api/issuing/cards"
+  },
+  "servers": [
+    { "url": "https://api.airwallex.com" },
+    { "url": "https://api.sandbox.airwallex.com" }
+  ],
+  "paths": {
+    "/api/v1/authentication/login": {
+      "post": {
+        "operationId": "AuthenticationLogin",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LoginRequest" } } } },
+        "responses": { "200": { "description": "Authenticated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LoginResponse" } } } }, "default": { "$ref": "#/components/responses/ProviderError" } }
+      }
+    },
+    "/api/v1/issuing/config": {
+      "get": {
+        "operationId": "GetIssuingConfig",
+        "responses": { "200": { "description": "Issuing configuration", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericObject" } } } }, "default": { "$ref": "#/components/responses/ProviderError" } }
+      }
+    },
+    "/api/v1/issuing/cards/create": {
+      "post": {
+        "operationId": "CreateIssuingCard",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateCardRequest" } } } },
+        "responses": { "202": { "description": "Card accepted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AirwallexCard" } } } }, "default": { "$ref": "#/components/responses/ProviderError" } }
+      }
+    },
+    "/api/v1/issuing/cards/{id}": {
+      "get": {
+        "operationId": "GetIssuingCard",
+        "parameters": [{ "$ref": "#/components/parameters/CardID" }],
+        "responses": { "200": { "description": "Card", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AirwallexCard" } } } }, "default": { "$ref": "#/components/responses/ProviderError" } }
+      }
+    },
+    "/api/v1/issuing/cards/{id}/update": {
+      "post": {
+        "operationId": "UpdateIssuingCard",
+        "parameters": [{ "$ref": "#/components/parameters/CardID" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateCardRequest" } } } },
+        "responses": { "200": { "description": "Updated card", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AirwallexCard" } } } }, "default": { "$ref": "#/components/responses/ProviderError" } }
+      }
+    },
+    "/api/v1/issuing/cards/{id}/details": {
+      "get": {
+        "operationId": "GetIssuingCardDetails",
+        "parameters": [{ "$ref": "#/components/parameters/CardID" }],
+        "responses": { "200": { "description": "Sensitive card details", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SensitiveCardDetails" } } } }, "default": { "$ref": "#/components/responses/ProviderError" } }
+      }
+    },
+    "/api/v1/issuing/cards/{id}/limits": {
+      "get": {
+        "operationId": "GetIssuingCardLimits",
+        "parameters": [{ "$ref": "#/components/parameters/CardID" }],
+        "responses": { "200": { "description": "Card limits", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CardLimits" } } } }, "default": { "$ref": "#/components/responses/ProviderError" } }
+      }
+    },
+    "/api/v1/issuing/cards/{id}/activate": {
+      "post": {
+        "operationId": "ActivateIssuingCard",
+        "parameters": [{ "$ref": "#/components/parameters/CardID" }],
+        "responses": { "200": { "description": "Activated card", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AirwallexCard" } } } }, "default": { "$ref": "#/components/responses/ProviderError" } }
+      }
+    },
+    "/api/v1/issuing/card_transactions": {
+      "get": {
+        "operationId": "ListIssuingCardTransactions",
+        "parameters": [
+          { "name": "card_id", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "page", "in": "query", "required": false, "schema": { "type": "integer" } },
+          { "name": "page_size", "in": "query", "required": false, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "Card transactions", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CardTransactionList" } } } }, "default": { "$ref": "#/components/responses/ProviderError" } }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "CardID": { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+    },
+    "responses": {
+      "ProviderError": { "description": "Provider error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenericObject" } } } }
+    },
+    "schemas": {
+      "GenericObject": { "type": "object", "additionalProperties": true },
+      "LoginRequest": { "type": "object", "required": ["client_id", "api_key"], "properties": { "client_id": { "type": "string" }, "api_key": { "type": "string", "format": "password" } } },
+      "LoginResponse": { "type": "object", "properties": { "token": { "type": "string" }, "expires_at": { "type": "string" } }, "additionalProperties": true },
+      "CreateCardRequest": {
+        "type": "object",
+        "required": ["authorization_controls", "cardholder_id", "created_by", "form_factor", "is_personalized", "program", "request_id"],
+        "properties": {
+          "request_id": { "type": "string" },
+          "cardholder_id": { "type": "string" },
+          "created_by": { "type": "string" },
+          "form_factor": { "type": "string", "enum": ["VIRTUAL", "PHYSICAL"] },
+          "is_personalized": { "type": "boolean" },
+          "activate_on_issue": { "type": "boolean" },
+          "purpose": { "type": "string" },
+          "program": { "$ref": "#/components/schemas/CardProgram" },
+          "authorization_controls": { "$ref": "#/components/schemas/AuthorizationControls" },
+          "metadata": { "type": "object", "additionalProperties": { "type": "string" } },
+          "nick_name": { "type": "string" }
+        }
+      },
+      "UpdateCardRequest": { "type": "object", "properties": { "card_status": { "type": "string", "enum": ["INACTIVE", "ACTIVE", "CLOSED"] }, "metadata": { "type": "object", "additionalProperties": { "type": "string" } } } },
+      "CardProgram": { "type": "object", "properties": { "type": { "type": "string" }, "purpose": { "type": "string" }, "sub_type": { "type": "string" } }, "additionalProperties": true },
+      "AuthorizationControls": { "type": "object", "required": ["allowed_transaction_count", "transaction_limits"], "properties": { "allowed_transaction_count": { "type": "string", "enum": ["SINGLE", "MULTIPLE"] }, "transaction_limits": { "type": "object", "additionalProperties": true } }, "additionalProperties": true },
+      "AirwallexCard": { "type": "object", "properties": { "card_id": { "type": "string" }, "card_number": { "type": "string" }, "card_status": { "type": "string" }, "cardholder_id": { "type": "string" }, "brand": { "type": "string" }, "last4": { "type": "string" }, "created_at": { "type": "string" }, "purpose": { "type": "string" }, "name_on_card": { "type": "string" }, "nick_name": { "type": "string" }, "currency": { "type": "string" } }, "additionalProperties": true },
+      "SensitiveCardDetails": { "type": "object", "properties": { "card_number": { "type": "string", "format": "password" }, "cvv": { "type": "string", "format": "password" }, "expiry_month": { "type": "integer" }, "expiry_year": { "type": "integer" }, "name_on_card": { "type": "string" } }, "additionalProperties": true },
+      "CardLimits": { "type": "object", "properties": { "currency": { "type": "string" }, "limits": { "type": "array", "items": { "$ref": "#/components/schemas/Limit" } } }, "additionalProperties": true },
+      "Limit": { "type": "object", "properties": { "amount": { "type": "number" }, "interval": { "type": "string" }, "remaining": { "type": "number" } }, "additionalProperties": true },
+      "CardTransactionList": { "type": "object", "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/CardTransaction" } }, "has_more": { "type": "boolean" } }, "additionalProperties": true },
+      "CardTransaction": { "type": "object", "properties": { "id": { "type": "string" }, "card_id": { "type": "string" }, "amount": { "type": "number" }, "billing_amount": { "type": "number" }, "billing_currency": { "type": "string" }, "status": { "type": "string" }, "created_at": { "type": "string" }, "merchant": { "type": "object", "additionalProperties": true }, "failure_reason": { "type": "string" } }, "additionalProperties": true }
+    }
+  }
+}

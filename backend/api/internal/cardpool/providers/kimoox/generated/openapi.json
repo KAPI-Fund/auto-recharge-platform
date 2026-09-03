@@ -1,0 +1,945 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Kimoox VCC Open API Adapter",
+    "version": "2026-08-28",
+    "description": "Compatibility schema reconstructed from the published Kimoox VCC Open API documentation. Kimoox does not currently publish a downloadable openapi.json path; this file mirrors the documented endpoints used by the adapter. Source: https://docs.kimoox.com/"
+  },
+  "servers": [
+    {
+      "url": "https://card.kimoox.com"
+    }
+  ],
+  "paths": {
+    "/openapi/v1/card-bins/query": {
+      "post": {
+        "operationId": "KimooxCardBins",
+        "summary": "获取卡 BIN",
+        "description": "获取当前 API 用户所属商户已配置、已启用、平台 BIN 也启用的卡 BIN 列表。开卡配额按商户统一管理，不按单个 BIN 分别设置；统一配额以 data.quota 为准。为兼容老客户，列表中的 maxCardCount 和 issuedCardCount 字段继续保留。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KimooxRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "业务响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KimooxResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "401": {
+            "description": "API Key 无效或权限未开启"
+          },
+          "403": {
+            "description": "签名或 IP 白名单校验失败"
+          },
+          "500": {
+            "description": "系统异常"
+          }
+        }
+      }
+    },
+    "/openapi/v1/account/balance/query": {
+      "post": {
+        "operationId": "KimooxAccountBalance",
+        "summary": "获取账户余额",
+        "description": "获取当前 API 用户所属商户主账户的 USD 和 USDT 余额。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KimooxRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "业务响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KimooxResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "401": {
+            "description": "API Key 无效或权限未开启"
+          },
+          "403": {
+            "description": "签名或 IP 白名单校验失败"
+          },
+          "500": {
+            "description": "系统异常"
+          }
+        }
+      }
+    },
+    "/openapi/v1/account/transactions/query": {
+      "post": {
+        "operationId": "KimooxAccountTransactions",
+        "summary": "获取账户资金明细",
+        "description": "查询当前 API 用户所属商户主账户资金流水，对应商户端资产总览下面的账户流水列表。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KimooxRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "业务响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KimooxResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "401": {
+            "description": "API Key 无效或权限未开启"
+          },
+          "403": {
+            "description": "签名或 IP 白名单校验失败"
+          },
+          "500": {
+            "description": "系统异常"
+          }
+        }
+      }
+    },
+    "/openapi/v1/account/convert": {
+      "post": {
+        "operationId": "KimooxAccountConvert",
+        "summary": "账户余额兑换",
+        "description": "在当前 API 用户所属商户主账户内进行 USD 和 USDT 余额兑换。USDT 转 USD 按商户配置费率收费，USD 转 USDT 沿用现有网页逻辑不收费。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KimooxRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "业务响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KimooxResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "401": {
+            "description": "API Key 无效或权限未开启"
+          },
+          "403": {
+            "description": "签名或 IP 白名单校验失败"
+          },
+          "500": {
+            "description": "系统异常"
+          }
+        }
+      }
+    },
+    "/openapi/v1/budget-groups/query": {
+      "post": {
+        "operationId": "KimooxBudgetGroups",
+        "summary": "查询预算卡组",
+        "description": "查询可用于创建预算组的卡组列表。只返回卡组 ID、名称、状态和关联 BIN ID。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KimooxRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "业务响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KimooxResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "401": {
+            "description": "API Key 无效或权限未开启"
+          },
+          "403": {
+            "description": "签名或 IP 白名单校验失败"
+          },
+          "500": {
+            "description": "系统异常"
+          }
+        }
+      }
+    },
+    "/openapi/v1/budgets/create": {
+      "post": {
+        "operationId": "KimooxBudgetsCreate",
+        "summary": "创建预算组",
+        "description": "为当前 API 用户所属商户创建预算组，复用现有预算服务的卡组权限、重复名称和上游绑定逻辑。requestNo 必填，会在 BUDGET_OPERATION.CREATED Webhook 中原样返回。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KimooxRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "业务响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KimooxResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "401": {
+            "description": "API Key 无效或权限未开启"
+          },
+          "403": {
+            "description": "签名或 IP 白名单校验失败"
+          },
+          "500": {
+            "description": "系统异常"
+          }
+        }
+      }
+    },
+    "/openapi/v1/budgets/query": {
+      "post": {
+        "operationId": "KimooxBudgetsQuery",
+        "summary": "查询预算组",
+        "description": "分页查询当前 API 用户所属商户的预算组列表。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KimooxRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "业务响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KimooxResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "401": {
+            "description": "API Key 无效或权限未开启"
+          },
+          "403": {
+            "description": "签名或 IP 白名单校验失败"
+          },
+          "500": {
+            "description": "系统异常"
+          }
+        }
+      }
+    },
+    "/openapi/v1/budgets/recharge": {
+      "post": {
+        "operationId": "KimooxBudgetsRecharge",
+        "summary": "预算组充值",
+        "description": "对当前 API 用户所属商户的预算组充值，币种固定 USD。资金扣减、锁、流水、上游提交复用现有预算充值逻辑。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KimooxRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "业务响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KimooxResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "401": {
+            "description": "API Key 无效或权限未开启"
+          },
+          "403": {
+            "description": "签名或 IP 白名单校验失败"
+          },
+          "500": {
+            "description": "系统异常"
+          }
+        }
+      }
+    },
+    "/openapi/v1/budgets/withdraw": {
+      "post": {
+        "operationId": "KimooxBudgetsWithdraw",
+        "summary": "预算组转出",
+        "description": "将当前 API 用户所属商户的预算组余额转回主账户，币种固定 USD。余额校验、锁、流水和上游提交复用现有预算转出逻辑。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KimooxRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "业务响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KimooxResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "401": {
+            "description": "API Key 无效或权限未开启"
+          },
+          "403": {
+            "description": "签名或 IP 白名单校验失败"
+          },
+          "500": {
+            "description": "系统异常"
+          }
+        }
+      }
+    },
+    "/openapi/v1/card-transactions/query": {
+      "post": {
+        "operationId": "KimooxCardTransactions",
+        "summary": "卡交易查询",
+        "description": "分页查询当前 API 用户所属商户的卡交易记录，口径与商户端交易列表一致。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KimooxRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "业务响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KimooxResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "401": {
+            "description": "API Key 无效或权限未开启"
+          },
+          "403": {
+            "description": "签名或 IP 白名单校验失败"
+          },
+          "500": {
+            "description": "系统异常"
+          }
+        }
+      }
+    },
+    "/openapi/v1/cards/funds/operate": {
+      "post": {
+        "operationId": "KimooxCardsFundsOperate",
+        "summary": "卡资金操作",
+        "description": "对当前 API 用户所属商户的卡执行资金操作。RECHARGE=卡充值，WITHDRAW=卡余额转出；当前卡资金操作固定使用 USD。接口同步返回提交结果，最终成功以 CARD_OPERATION.RECHARGE_SUCCESS 或 CARD_OPERATION.WITHDRAW_SUCCESS Webhook 为准。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KimooxRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "业务响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KimooxResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "401": {
+            "description": "API Key 无效或权限未开启"
+          },
+          "403": {
+            "description": "签名或 IP 白名单校验失败"
+          },
+          "500": {
+            "description": "系统异常"
+          }
+        }
+      }
+    },
+    "/openapi/v1/cards/status/operate": {
+      "post": {
+        "operationId": "KimooxCardsStatusOperate",
+        "summary": "卡状态操作",
+        "description": "对当前 API 用户所属商户的卡执行冻结、解冻或销卡。接口只做开放 API 参数适配，实际状态流转复用商户端现有卡操作逻辑。接口同步返回提交结果，最终成功以 CARD_OPERATION.FREEZE_SUCCESS、CARD_OPERATION.UNFREEZE_SUCCESS 或 CARD_OPERATION.CANCEL_SUCCESS Webhook 为准。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KimooxRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "业务响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KimooxResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "401": {
+            "description": "API Key 无效或权限未开启"
+          },
+          "403": {
+            "description": "签名或 IP 白名单校验失败"
+          },
+          "500": {
+            "description": "系统异常"
+          }
+        }
+      }
+    },
+    "/openapi/v1/cards/limit/adjust": {
+      "post": {
+        "operationId": "KimooxCardsLimitAdjust",
+        "summary": "更改单卡限额",
+        "description": "调整当前 API 用户所属商户名下单张预算卡或共享卡的限额。入参沿用商户端 LimitAdjustRequest：单笔限额可单独提交；单日、单月、生命周期周期限额同次只能选择一种；生命周期固定额度使用 fixed_amount + cardLifeCycleLimit，生命周期无限额使用 unlimited。成功后会记录限额历史，并异步推送 CARD_OPERATION.LIMIT_CHANGE_SUCCESS Webhook。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KimooxRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "业务响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KimooxResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "401": {
+            "description": "API Key 无效或权限未开启"
+          },
+          "403": {
+            "description": "签名或 IP 白名单校验失败"
+          },
+          "500": {
+            "description": "系统异常"
+          }
+        }
+      }
+    },
+    "/openapi/v1/cards/remark/update": {
+      "post": {
+        "operationId": "KimooxCardsRemarkUpdate",
+        "summary": "更改单卡备注",
+        "description": "修改当前 API 用户所属商户名下单张卡的备注。成功后会记录卡操作日志，并异步推送 CARD_OPERATION.REMARK_UPDATE_SUCCESS Webhook。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KimooxRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "业务响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KimooxResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "401": {
+            "description": "API Key 无效或权限未开启"
+          },
+          "403": {
+            "description": "签名或 IP 白名单校验失败"
+          },
+          "500": {
+            "description": "系统异常"
+          }
+        }
+      }
+    },
+    "/openapi/v1/cards/private-info/query": {
+      "post": {
+        "operationId": "KimooxCardsPrivateInfoQuery",
+        "summary": "查询卡私密信息",
+        "description": "查询当前 API 用户所属商户名下单张卡的完整卡号、有效期和 CVV。接口不会返回明文，而是使用商户配置的 Webhook Secret 按字段独立加密；卡不存在、卡不属于当前商户或未配置 Webhook Secret 时请求失败。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KimooxRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "业务响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KimooxResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "401": {
+            "description": "API Key 无效或权限未开启"
+          },
+          "403": {
+            "description": "签名或 IP 白名单校验失败"
+          },
+          "500": {
+            "description": "系统异常"
+          }
+        }
+      }
+    },
+    "/openapi/v1/cards/apply": {
+      "post": {
+        "operationId": "KimooxCardsApply",
+        "summary": "申请卡",
+        "description": "提交开卡申请。储值卡和预算卡共用同一接口；预算卡必须填写 cardGroupId 和 budgetId。提交成功后先调用“查询开卡任务状态”，确认 SUCCESS 或 PARTIAL_SUCCESS 后，再使用 batchNo 调用“查询卡”。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KimooxRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "业务响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KimooxResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "401": {
+            "description": "API Key 无效或权限未开启"
+          },
+          "403": {
+            "description": "签名或 IP 白名单校验失败"
+          },
+          "500": {
+            "description": "系统异常"
+          }
+        }
+      }
+    },
+    "/openapi/v1/cards/apply-status/query": {
+      "post": {
+        "operationId": "KimooxCardsApplyStatus",
+        "summary": "查询开卡任务状态",
+        "description": "查询申请卡接口返回的开卡任务状态。建议先用 taskId、batchNo 或 requestNo 查询到 SUCCESS / PARTIAL_SUCCESS 后，再使用 batchNo 调用查询卡接口。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KimooxRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "业务响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KimooxResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "401": {
+            "description": "API Key 无效或权限未开启"
+          },
+          "403": {
+            "description": "签名或 IP 白名单校验失败"
+          },
+          "500": {
+            "description": "系统异常"
+          }
+        }
+      }
+    },
+    "/openapi/v1/cards/query": {
+      "post": {
+        "operationId": "KimooxCardsQueryOpen",
+        "summary": "查询卡",
+        "description": "分页查询当前 API 用户所属商户的卡片列表。列表只返回脱敏卡号，不返回完整卡号、CVV 或有效期。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KimooxRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "业务响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KimooxResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "401": {
+            "description": "API Key 无效或权限未开启"
+          },
+          "403": {
+            "description": "签名或 IP 白名单校验失败"
+          },
+          "500": {
+            "description": "系统异常"
+          }
+        }
+      }
+    },
+    "/openapi/v1/cards/balances/query": {
+      "post": {
+        "operationId": "KimooxCardBalancesQuery",
+        "summary": "查询卡余额",
+        "description": "查询当前 API 用户所属商户名下的卡余额，支持单卡查询和批量查询，每次最多查询 10 张卡。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KimooxRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "业务响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KimooxResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "401": {
+            "description": "API Key 无效或权限未开启"
+          },
+          "403": {
+            "description": "签名或 IP 白名单校验失败"
+          },
+          "500": {
+            "description": "系统异常"
+          }
+        }
+      }
+    },
+    "/openapi/v1/cards/verification-code/query": {
+      "post": {
+        "operationId": "KimooxCardsVerificationCodeQuery",
+        "summary": "查询验证码",
+        "description": "按卡业务 ID 或完整卡号查询当前 API 商户名下最新的商户描述末尾六位验证码。卡存在但暂无匹配交易时返回 found=false、verificationCode=null。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KimooxRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "业务响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KimooxResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "401": {
+            "description": "API Key 无效或权限未开启"
+          },
+          "403": {
+            "description": "签名或 IP 白名单校验失败"
+          },
+          "404": {
+            "description": "卡不存在或不属于当前 API 商户"
+          },
+          "500": {
+            "description": "系统异常"
+          }
+        }
+      }
+    },
+    "/openapi/v1/cardholders/query": {
+      "post": {
+        "operationId": "KimooxCardholdersQuery",
+        "summary": "持卡人查询",
+        "description": "查询当前 API 用户所属商户已创建的持卡人列表。响应不会返回证件号。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KimooxRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "业务响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KimooxResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "401": {
+            "description": "API Key 无效或权限未开启"
+          },
+          "403": {
+            "description": "签名或 IP 白名单校验失败"
+          },
+          "500": {
+            "description": "系统异常"
+          }
+        }
+      }
+    },
+    "/openapi/v1/cardholders/create": {
+      "post": {
+        "operationId": "KimooxCardholdersCreate",
+        "summary": "创建持卡人",
+        "description": "为当前 API 用户所属商户创建持卡人，复用商户端持卡人创建逻辑。requestNo 可用于幂等防重。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KimooxRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "业务响应",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KimooxResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "401": {
+            "description": "API Key 无效或权限未开启"
+          },
+          "403": {
+            "description": "签名或 IP 白名单校验失败"
+          },
+          "500": {
+            "description": "系统异常"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "KimooxRequest": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Request JSON documented by Kimoox for the selected endpoint."
+      },
+      "KimooxResponse": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Kimoox envelope containing code, msg, requestId, and data."
+      }
+    }
+  },
+  "x-source-document-url": "https://docs.kimoox.com/",
+  "x-authentication": {
+    "headers": [
+      "X-VCC-API-KEY",
+      "X-VCC-TIMESTAMP",
+      "X-VCC-NONCE",
+      "X-VCC-SIGNATURE",
+      "X-VCC-REQUEST-ID"
+    ],
+    "signature": "HMAC-SHA256(HTTP_METHOD + \"\\n\" + REQUEST_PATH + \"\\n\" + TIMESTAMP + \"\\n\" + NONCE + \"\\n\" + SHA256_HEX(RAW_REQUEST_BODY))"
+  }
+}

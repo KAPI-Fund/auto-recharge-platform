@@ -1,0 +1,10 @@
+services:
+  worker:
+    depends_on: []
+    environment:
+      API_BASE_URL: http://host.docker.internal:28080
+      REDIS_URL: redis://redis:6379/0
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8091:8091"
