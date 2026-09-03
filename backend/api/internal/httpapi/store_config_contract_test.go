@@ -153,7 +153,7 @@ func TestNormalizeLegacyConfigInputAcceptsKimooxFieldNames(t *testing.T) {
 		"kimooxAPIKey":                   "api-key",
 		"kimooxAPISecret":                "api-secret",
 		"kimooxWebhookSecret":            "webhook-secret",
-		"kimooxCardBINID":                "1001",
+		"kimooxCardBINIDs":               "1001",
 		"kimooxCardType":                 "budget",
 		"kimooxCardholderID":             "12",
 		"kimooxCardGroupID":              "13",
@@ -168,7 +168,7 @@ func TestNormalizeLegacyConfigInputAcceptsKimooxFieldNames(t *testing.T) {
 		"kimoox_api_key":                     "api-key",
 		"kimoox_api_secret":                  "api-secret",
 		"kimoox_webhook_secret":              "webhook-secret",
-		"kimoox_card_bin_id":                 "1001",
+		"kimoox_card_bin_ids":                "1001",
 		"kimoox_card_type":                   "budget",
 		"kimoox_cardholder_id":               "12",
 		"kimoox_card_group_id":               "13",
@@ -196,6 +196,40 @@ func TestNormalizeModernConfigInputAcceptsDogPayVelocityLimit(t *testing.T) {
 
 	if _, err := normalizeModernConfigValues(map[string]string{"dogpay_velocity_amount_limit": "-1"}); err == nil {
 		t.Fatal("negative DogPay velocity limit should be rejected")
+	}
+}
+
+func TestNormalizeModernConfigInputAcceptsKimooxMultipleBINs(t *testing.T) {
+	values, err := normalizeModernConfigValues(map[string]string{
+		"kimooxCardBINIDs": "1001, 1002\n1003",
+	})
+	if err != nil {
+		t.Fatalf("normalizeModernConfigValues() error = %v", err)
+	}
+	if values["kimoox_card_bin_ids"] != "1001, 1002\n1003" {
+		t.Fatalf("normalized Kimoox BINs = %q", values["kimoox_card_bin_ids"])
+	}
+
+	legacy := normalizeLegacyConfigInput(map[string]any{
+		"kimooxCardBINIDs": `["1001","1002"]`,
+	})
+	if legacy["kimoox_card_bin_ids"] != `["1001","1002"]` {
+		t.Fatalf("legacy normalized Kimoox BINs = %#v", legacy["kimoox_card_bin_ids"])
+	}
+}
+
+func TestNormalizeConfigInputRejectsLegacyKimooxSingleBINField(t *testing.T) {
+	modern, err := normalizeModernConfigValues(map[string]string{"kimooxCardBINID": "1001"})
+	if err != nil {
+		t.Fatalf("normalizeModernConfigValues() error = %v", err)
+	}
+	if _, exists := modern["kimoox_card_bin_id"]; exists {
+		t.Fatal("legacy Kimoox single BIN field must not be persisted")
+	}
+
+	legacy := normalizeLegacyConfigInput(map[string]any{"kimooxCardBINID": "1001"})
+	if _, exists := legacy["kimoox_card_bin_id"]; exists {
+		t.Fatal("legacy Kimoox single BIN field must not be normalized")
 	}
 }
 
@@ -546,7 +580,7 @@ func TestValidateCardProviderSettingsAllowsEnableAndSwitchToKimooxTogether(t *te
 		"card_provider_kimoox_enabled": "1",
 		"kimoox_api_key":               "api-key",
 		"kimoox_api_secret":            "api-secret",
-		"kimoox_card_bin_id":           "1001",
+		"kimoox_card_bin_ids":          "1001",
 	})
 	if err != nil {
 		t.Fatalf("combined Kimoox enable and switch should be valid: %v", err)

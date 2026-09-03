@@ -39,6 +39,7 @@ func registerLegacyRoutes(router *gin.Engine, s *Server) {
 	admin.GET("/data", s.legacyAdminData)
 	admin.GET("/config", s.getConfig)
 	admin.POST("/config", s.legacySaveConfig)
+	admin.GET("/card-providers/kimoox/bins", s.legacyKimooxCardBINs)
 	admin.POST("/email/test", s.legacyTestEmail)
 	admin.GET("/region", s.legacyRegion)
 	admin.PUT("/region", s.legacySaveRegion)

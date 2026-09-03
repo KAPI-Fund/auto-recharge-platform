@@ -57,6 +57,36 @@ func (s *Server) adminCardPools(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"pools": pools, "providers": providers})
 }
 
+// legacyKimooxCardBINs exposes only non-sensitive BIN metadata for the
+// configuration screen. Provider-specific discovery stays behind the
+// optional CardBINLister extension and never leaks into PaymentService.
+func (s *Server) legacyKimooxCardBINs(c *gin.Context) {
+	if s.CardPools == nil || s.CardPools.Registry == nil {
+		fail(c, http.StatusServiceUnavailable, "银行卡 Provider 服务不可用")
+		return
+	}
+	if boolConfigValue(s.configValue("card_provider_kimoox_enabled", "0")) != "1" {
+		fail(c, http.StatusBadRequest, "请先启用 KIMOOX Provider")
+		return
+	}
+	provider, err := s.CardPools.Registry.Get("KIMOOX")
+	if err != nil {
+		fail(c, http.StatusBadRequest, "KIMOOX Provider 不可用")
+		return
+	}
+	lister, ok := provider.(cardpool.CardBINLister)
+	if !ok {
+		fail(c, http.StatusNotImplemented, "KIMOOX Provider 不支持 BIN 查询")
+		return
+	}
+	bins, err := lister.ListCardBINs(c.Request.Context())
+	if err != nil {
+		writeCardProviderValidationError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "provider": "KIMOOX", "bins": bins})
+}
+
 type adminCreateProviderCardInput struct {
 	PoolID            string            `json:"poolId"`
 	Provider          string            `json:"provider"`

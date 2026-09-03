@@ -83,7 +83,6 @@ func (p *Provider) ValidateConfiguration() error {
 	}{
 		{p.secret("kimoox_api_key", p.value("kimoox_api_key", "")), "Kimoox API Key"},
 		{p.secret("kimoox_api_secret", p.value("kimoox_api_secret", "")), "Kimoox API Secret"},
-		{p.value("kimoox_card_bin_id", ""), "Kimoox Card BIN ID"},
 	}
 	for _, check := range checks {
 		if strings.TrimSpace(check.value) == "" {
@@ -95,8 +94,8 @@ func (p *Provider) ValidateConfiguration() error {
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
 		return cardpool.NewProviderError(providerName, "validate_config", cardpool.CategoryInvalidRequest, false, false, errors.New("Kimoox Base URL 必须是有效的 HTTP/HTTPS 地址"))
 	}
-	if _, err := strconv.ParseInt(strings.TrimSpace(p.value("kimoox_card_bin_id", "")), 10, 64); err != nil {
-		return cardpool.NewProviderError(providerName, "validate_config", cardpool.CategoryInvalidRequest, false, false, errors.New("Kimoox Card BIN ID 必须是整数"))
+	if _, err := p.binIDs(); err != nil {
+		return cardpool.NewProviderError(providerName, "validate_config", cardpool.CategoryInvalidRequest, false, false, err)
 	}
 	cardType := strings.ToUpper(p.value("kimoox_card_type", "PREPAID"))
 	if cardType != "PREPAID" && cardType != "BUDGET" {
@@ -251,10 +250,11 @@ func (p *Provider) CreateCard(ctx context.Context, request cardpool.CreateCardRe
 		return cardpool.PaymentCard{}, cardpool.NewProviderError(providerName, "create_card", cardpool.CategoryProviderUnavailable, false, true, errors.New("Kimoox provider is disabled"))
 	}
 	cardType := strings.ToUpper(p.value("kimoox_card_type", "PREPAID"))
-	binID, err := strconv.ParseInt(p.value("kimoox_card_bin_id", ""), 10, 64)
-	if err != nil || binID <= 0 {
-		return cardpool.PaymentCard{}, cardpool.NewProviderError(providerName, "create_card", cardpool.CategoryInvalidRequest, false, false, errors.New("Kimoox Card BIN ID 未配置或无效"))
+	binIDs, err := p.binIDs()
+	if err != nil {
+		return cardpool.PaymentCard{}, cardpool.NewProviderError(providerName, "create_card", cardpool.CategoryInvalidRequest, false, false, err)
 	}
+	binID := selectBINID(binIDs, firstNonEmpty(request.IdempotencyKey, request.PaymentTaskID, request.BusinessAccountID))
 	requestNo := kimooxRequestNo(request.IdempotencyKey)
 	body := api.KimooxCardsApplyJSONRequestBody{
 		"requestNo": requestNo,
@@ -307,6 +307,114 @@ func (p *Provider) CreateCard(ctx context.Context, request cardpool.CreateCardRe
 		return cardpool.PaymentCard{}, err
 	}
 	return p.findAppliedCard(ctx, batchNo, request)
+}
+
+// ListCardBINs returns the BINs visible to the configured Kimoox account. The
+// response is mapped to provider-neutral metadata for the admin UI.
+func (p *Provider) ListCardBINs(ctx context.Context) ([]cardpool.CardBIN, error) {
+	response, err := p.authenticatedRequest(ctx, func(client *api.Client) (*http.Response, error) {
+		return client.KimooxCardBins(ctx, api.KimooxCardBinsJSONRequestBody{})
+	})
+	if err != nil {
+		return nil, err
+	}
+	payload, err := shared.DecodeJSONObjectResponse(providerName, "list_card_bins", response)
+	if err != nil {
+		return nil, err
+	}
+	if err := kimooxBusinessError(payload, "list_card_bins"); err != nil {
+		return nil, err
+	}
+	data := objectData(payload)
+	items := shared.ArrayField(data, "list", "bins", "items", "records")
+	result := make([]cardpool.CardBIN, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		object, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		id := shared.StringField(object, "binId", "bin_id", "id", "bin")
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, cardpool.CardBIN{
+			ID:           id,
+			Name:         shared.StringField(object, "name", "binName", "bin_name"),
+			CardType:     shared.StringField(object, "cardType", "card_type"),
+			Status:       shared.StringField(object, "status", "state"),
+			MaxCardCount: int64(shared.IntField(object, "maxCardCount", "max_card_count")),
+			IssuedCount:  int64(shared.IntField(object, "issuedCardCount", "issued_card_count")),
+		})
+	}
+	if len(result) == 0 {
+		return nil, cardpool.NewProviderError(providerName, "list_card_bins", cardpool.CategoryTechnicalFailure, false, false, errors.New("Kimoox BIN 查询未返回可用 BIN"))
+	}
+	return result, nil
+}
+
+func (p *Provider) binIDs() ([]int64, error) {
+	value := strings.TrimSpace(p.value("kimoox_card_bin_ids", ""))
+	ids, err := parseKimooxBINIDs(value)
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, errors.New("Kimoox Card BIN ID 未配置或无效")
+	}
+	return ids, nil
+}
+
+func parseKimooxBINIDs(value string) ([]int64, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, errors.New("Kimoox Card BIN ID 未配置或无效")
+	}
+	if strings.HasPrefix(value, "[") {
+		var raw []any
+		if err := json.Unmarshal([]byte(value), &raw); err != nil {
+			return nil, errors.New("Kimoox Card BIN ID 必须是整数列表")
+		}
+		parts := make([]string, 0, len(raw))
+		for _, item := range raw {
+			parts = append(parts, shared.StringField(map[string]any{"value": item}, "value"))
+		}
+		value = strings.Join(parts, ",")
+	}
+	parts := strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == '\n' || r == '\r' || r == ';' || r == ' ' || r == '\t' })
+	if len(parts) == 0 {
+		return nil, errors.New("Kimoox Card BIN ID 未配置或无效")
+	}
+	ids := make([]int64, 0, len(parts))
+	seen := make(map[int64]struct{}, len(parts))
+	for _, part := range parts {
+		id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64)
+		if err != nil || id <= 0 {
+			return nil, errors.New("Kimoox Card BIN ID 必须是大于 0 的整数列表")
+		}
+		if _, exists := seen[id]; exists {
+			return nil, errors.New("Kimoox Card BIN ID 不能重复")
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func selectBINID(ids []int64, stableKey string) int64 {
+	if len(ids) == 1 {
+		return ids[0]
+	}
+	digest := sha256.Sum256([]byte(strings.TrimSpace(stableKey)))
+	var value uint64
+	for _, item := range digest[:8] {
+		value = value<<8 | uint64(item)
+	}
+	return ids[value%uint64(len(ids))]
 }
 
 func (p *Provider) waitForApply(ctx context.Context, taskID, batchNo, requestNo string) error {

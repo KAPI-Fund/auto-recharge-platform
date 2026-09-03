@@ -40,7 +40,7 @@ func TestProviderUsesSignedAsyncApplyAndCardLifecycle(t *testing.T) {
 		"kimoox_base_url":                    "",
 		"kimoox_api_key":                     "api-key",
 		"kimoox_api_secret":                  apiSecret,
-		"kimoox_card_bin_id":                 "1001",
+		"kimoox_card_bin_ids":                "1001",
 		"kimoox_card_type":                   "PREPAID",
 		"kimoox_apply_poll_attempts":         "3",
 		"kimoox_apply_poll_interval_seconds": "0",
@@ -172,7 +172,7 @@ func TestProviderDecryptsKimooxSensitiveDetails(t *testing.T) {
 	provider := New(testConfig{
 		"card_provider_kimoox_enabled": "1", "kimoox_base_url": server.URL,
 		"kimoox_api_key": "api-key", "kimoox_api_secret": "api-secret", "kimoox_webhook_secret": secret,
-		"kimoox_card_bin_id": "1001",
+		"kimoox_card_bin_ids": "1001",
 	}, server.Client())
 	details, err := provider.GetSensitiveCardDetails(context.Background(), "VC-1")
 	if err != nil {
@@ -205,13 +205,108 @@ func TestProviderValidationRequiresConfiguredIssuingInputs(t *testing.T) {
 	if err := provider.ValidateConfiguration(); err == nil || !strings.Contains(err.Error(), "Card BIN ID") {
 		t.Fatalf("ValidateConfiguration() error = %v", err)
 	}
-
-	valid := testConfig{
+	legacyOnly := testConfig{
 		"card_provider_kimoox_enabled": "1", "kimoox_api_key": "api-key", "kimoox_api_secret": "secret",
 		"kimoox_card_bin_id": "1001", "kimoox_base_url": "https://card.kimoox.com",
 	}
+	if err := New(legacyOnly, nil).ValidateConfiguration(); err == nil || !strings.Contains(err.Error(), "Card BIN ID") {
+		t.Fatalf("legacy single BIN configuration was accepted: %v", err)
+	}
+
+	valid := testConfig{
+		"card_provider_kimoox_enabled": "1", "kimoox_api_key": "api-key", "kimoox_api_secret": "secret",
+		"kimoox_card_bin_ids": "1001", "kimoox_base_url": "https://card.kimoox.com",
+	}
 	if err := New(valid, nil).ValidateConfiguration(); err != nil {
 		t.Fatalf("valid configuration rejected: %v", err)
+	}
+}
+
+func TestParseKimooxBINIDsAcceptsLegacyAndMultiValueFormats(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  []int64
+	}{
+		{name: "single", value: "1001", want: []int64{1001}},
+		{name: "delimited", value: "1001, 1002;1003\n1004", want: []int64{1001, 1002, 1003, 1004}},
+		{name: "json strings", value: `["1001", "1002"]`, want: []int64{1001, 1002}},
+		{name: "json numbers", value: `[1001,1002]`, want: []int64{1001, 1002}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := parseKimooxBINIDs(test.value)
+			if err != nil {
+				t.Fatalf("parseKimooxBINIDs(%q) error = %v", test.value, err)
+			}
+			if len(got) != len(test.want) {
+				t.Fatalf("parseKimooxBINIDs(%q) = %#v, want %#v", test.value, got, test.want)
+			}
+			for index := range test.want {
+				if got[index] != test.want[index] {
+					t.Fatalf("parseKimooxBINIDs(%q) = %#v, want %#v", test.value, got, test.want)
+				}
+			}
+		})
+	}
+}
+
+func TestParseKimooxBINIDsRejectsInvalidAndDuplicateValues(t *testing.T) {
+	for _, value := range []string{"", "0", "-1", "1001,abc", "1001,1001", `[1001,"1001"]`} {
+		t.Run(value, func(t *testing.T) {
+			if _, err := parseKimooxBINIDs(value); err == nil {
+				t.Fatalf("parseKimooxBINIDs(%q) unexpectedly succeeded", value)
+			}
+		})
+	}
+}
+
+func TestSelectBINIDIsStableForTheSameIdempotencyKey(t *testing.T) {
+	ids := []int64{1001, 1002, 1003}
+	first := selectBINID(ids, "task-123")
+	for attempt := 0; attempt < 20; attempt++ {
+		if got := selectBINID(ids, "task-123"); got != first {
+			t.Fatalf("selectBINID changed across retries: first=%d retry=%d", first, got)
+		}
+	}
+	if first != selectBINID(ids, "task-123") {
+		t.Fatal("same idempotency key must select the same BIN")
+	}
+}
+
+func TestProviderListCardBINsMapsAndDeduplicatesMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/openapi/v1/card-bins/query" {
+			t.Fatalf("path = %s, want /openapi/v1/card-bins/query", request.URL.Path)
+		}
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		assertKimooxSignature(t, request, body, "api-secret")
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"code":200,"data":{"list":[{"binId":1001,"name":"US Debit","cardType":"PREPAID","status":"ACTIVE","maxCardCount":20,"issuedCardCount":3},{"binId":"1001","name":"duplicate"},{"id":"1002","name":"Budget BIN","cardType":"BUDGET","status":"OPEN"}]}}`)
+	}))
+	defer server.Close()
+
+	provider := New(testConfig{
+		"card_provider_kimoox_enabled": "1",
+		"kimoox_base_url":              server.URL,
+		"kimoox_api_key":               "api-key",
+		"kimoox_api_secret":            "api-secret",
+	}, server.Client())
+	bins, err := provider.ListCardBINs(context.Background())
+	if err != nil {
+		t.Fatalf("ListCardBINs() error = %v", err)
+	}
+	if len(bins) != 2 {
+		t.Fatalf("ListCardBINs() returned %d bins, want 2: %#v", len(bins), bins)
+	}
+	if bins[0].ID != "1001" || bins[0].Name != "US Debit" || bins[0].MaxCardCount != 20 || bins[0].IssuedCount != 3 {
+		t.Fatalf("first BIN = %#v", bins[0])
+	}
+	if bins[1].ID != "1002" || bins[1].CardType != "BUDGET" || bins[1].Status != "OPEN" {
+		t.Fatalf("second BIN = %#v", bins[1])
 	}
 }
 

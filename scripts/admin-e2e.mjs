@@ -156,6 +156,139 @@ async function run() {
     assert.equal(await totpBox.getByRole("button", { name: "确认启用", exact: true }).count(), 1, "TOTP confirmation button is missing");
     await assertNoPageError(page, "/admin/settings after TOTP setup");
 
+    const hiddenProviderConfigs = [
+      ["Airwallex", page.getByTestId("airwallex-config")],
+      ["Stripe Issuing", page.getByTestId("stripe-issuing-config")],
+      ["PhotonPay", page.getByTestId("photonpay-config")],
+      ["DogPay", page.getByTestId("dogpay-config")],
+    ];
+    const kimooxOnlyConfig = (await Promise.all(hiddenProviderConfigs.map(([, section]) => section.isHidden()))).every(Boolean);
+    assert.equal(kimooxOnlyConfig, true, "non-Kimoox external Provider configuration is visible");
+    if (kimooxOnlyConfig) {
+      for (const [name, section] of hiddenProviderConfigs) {
+        assert.notEqual(await section.getAttribute("hidden"), null, `${name} config must remain hidden`);
+      }
+
+      const localTextConfig = page.getByTestId("local-text-config");
+      const kimooxConfig = page.getByTestId("kimoox-config");
+      const visibleProviderSections = [["LOCAL_TEXT", localTextConfig], ["Kimoox", kimooxConfig]];
+      await localTextConfig.waitFor({ state: "visible", timeout: 15_000 });
+      await kimooxConfig.waitFor({ state: "visible", timeout: 15_000 });
+      for (const [name, section] of visibleProviderSections) {
+        assert.equal(await section.getAttribute("open"), null, `${name} config section should be collapsed by default`);
+        await section.locator("summary").click();
+        assert.notEqual(await section.getAttribute("open"), null, `${name} config section did not expand`);
+        assert.equal(await section.locator("summary").getAttribute("aria-expanded"), "true", `${name} config summary should report expanded state`);
+        assert.equal(await section.locator(".config-provider-content").isVisible(), true, `${name} config content did not become visible`);
+        for (const [otherName, otherSection] of visibleProviderSections) {
+          if (otherName === name) continue;
+          assert.equal(await otherSection.getAttribute("open"), null, `${otherName} stayed open after expanding ${name}`);
+        }
+      }
+      assert.equal(await localTextConfig.getByText("LOCAL_TEXT 不需要外部 API 凭据。", { exact: false }).count(), 1, "LOCAL_TEXT help is missing");
+      assert.equal(await page.getByRole("heading", { name: "Kimoox 发卡配置", exact: true, level: 3 }).count(), 1, "Kimoox config heading is missing");
+      assert.equal(await page.getByRole("button", { name: "保存全局配置", exact: true }).count(), 0, "duplicate global config save button is visible");
+
+      const executionPanel = page.locator("section.panel").filter({ hasText: "并发与维护" }).first();
+      const executionSaveButton = executionPanel.getByRole("button", { name: "保存并发与维护配置", exact: true });
+      const queuedTimeout = executionPanel.getByRole("spinbutton", { name: /排队超时（秒）/ });
+      assert.equal(await executionSaveButton.isEnabled(), true, "execution config save button is disabled");
+      const originalQueuedTimeout = await queuedTimeout.inputValue();
+      const temporaryQueuedTimeout = String(Number(originalQueuedTimeout) === 86400 ? 86399 : Number(originalQueuedTimeout) + 1);
+      await queuedTimeout.fill(temporaryQueuedTimeout);
+      const saveExecutionRequest = page.waitForRequest((request) => request.url().includes("/legacy-api/admin/config") && request.method() === "POST");
+      const saveExecutionResponse = page.waitForResponse((response) => response.url().includes("/legacy-api/admin/config") && response.request().method() === "POST" && response.status() === 200);
+      const saveExecutionReload = page.waitForResponse((response) => response.url().includes("/legacy-api/admin/config") && response.request().method() === "GET" && response.status() === 200);
+      await executionSaveButton.click();
+      const executionRequestBody = JSON.parse((await saveExecutionRequest).postData() || "{}");
+      assert.equal(executionRequestBody.recharge_queued_timeout_seconds, temporaryQueuedTimeout, "execution save omitted queue timeout");
+      assert.equal(Object.hasOwn(executionRequestBody, "card_pool_default_provider"), false, "execution save sent Provider settings");
+      await Promise.all([saveExecutionResponse, saveExecutionReload]);
+      assert.equal(await queuedTimeout.inputValue(), temporaryQueuedTimeout, "queue timeout was not retained after save");
+      await queuedTimeout.fill(originalQueuedTimeout);
+      const restoreExecutionResponse = page.waitForResponse((response) => response.url().includes("/legacy-api/admin/config") && response.request().method() === "POST" && response.status() === 200);
+      const restoreExecutionReload = page.waitForResponse((response) => response.url().includes("/legacy-api/admin/config") && response.request().method() === "GET" && response.status() === 200);
+      await executionSaveButton.click();
+      await Promise.all([restoreExecutionResponse, restoreExecutionReload]);
+      assert.equal(await queuedTimeout.inputValue(), originalQueuedTimeout, "queue timeout did not restore");
+
+      const providerConfigPanel = page.locator("section.panel").filter({ has: kimooxConfig }).first();
+      const routingSelect = providerConfigPanel.getByRole("combobox", { name: "路由策略", exact: true });
+      const defaultProviderSelect = providerConfigPanel.getByRole("combobox", { name: "默认 Provider", exact: true });
+      const creationModeSelect = providerConfigPanel.locator("label").filter({ hasText: "充值卡创建模式" }).locator("select");
+      assert.deepEqual(await defaultProviderSelect.locator("option").evaluateAll((options) => options.map((option) => option.value)), ["", "LOCAL_TEXT", "KIMOOX"], "default Provider contains hidden options");
+      assert.deepEqual(await creationModeSelect.locator("option").evaluateAll((options) => options.map((option) => option.value)), ["POOL_ONLY", "CREATE_ON_DEMAND"], "card creation mode options changed");
+      const originalRouting = await routingSelect.inputValue();
+      const originalDefaultProvider = await defaultProviderSelect.inputValue();
+      assert.ok(["LOCAL_TEXT", "KIMOOX"].includes(originalDefaultProvider), `unexpected visible default Provider ${originalDefaultProvider}`);
+      const toggleInput = (label) => providerConfigPanel.locator(".toggle-field").filter({ hasText: label }).locator('input[type="checkbox"]');
+      const localToggle = toggleInput("启用 LOCAL_TEXT");
+      const kimooxToggle = toggleInput("启用 KIMOOX");
+      assert.equal(await localToggle.count(), 1, "LOCAL_TEXT toggle is missing");
+      assert.equal(await kimooxToggle.count(), 1, "Kimoox toggle is missing");
+      const originalLocalEnabled = await localToggle.isChecked();
+      const originalKimooxEnabled = await kimooxToggle.isChecked();
+      const originalDefaultToggle = originalDefaultProvider === "LOCAL_TEXT" ? localToggle : kimooxToggle;
+      const alternateProvider = originalDefaultProvider === "LOCAL_TEXT" ? "KIMOOX" : "LOCAL_TEXT";
+      const alternateToggle = alternateProvider === "LOCAL_TEXT" ? localToggle : kimooxToggle;
+      const alternateOption = defaultProviderSelect.locator(`option[value="${alternateProvider}"]`);
+      assert.equal(await originalDefaultToggle.isEnabled(), false, "default Provider can be disabled");
+      if (!await alternateToggle.isChecked()) await alternateToggle.check();
+      assert.equal(await alternateOption.isDisabled(), false, "enabled Provider is not selectable");
+      await defaultProviderSelect.selectOption(alternateProvider);
+      assert.equal(await defaultProviderSelect.inputValue(), alternateProvider, "default Provider did not switch in UI");
+      assert.equal(await alternateToggle.isEnabled(), false, "new default Provider can be disabled");
+      await defaultProviderSelect.selectOption(originalDefaultProvider);
+      await localToggle.setChecked(originalLocalEnabled);
+      await kimooxToggle.setChecked(originalKimooxEnabled);
+      assert.equal(await defaultProviderSelect.inputValue(), originalDefaultProvider, "default Provider did not restore");
+
+      await ensureDetailsOpen(kimooxConfig);
+      const kimooxBaseURL = kimooxConfig.getByRole("textbox", { name: "Kimoox Base URL", exact: true });
+      const kimooxAPIKey = kimooxConfig.getByRole("textbox", { name: "API Key", exact: true });
+      const kimooxAPISecret = kimooxConfig.getByRole("textbox", { name: "API Secret", exact: true });
+      assert.equal(await kimooxBaseURL.isEnabled(), true, "Kimoox Base URL is disabled");
+      assert.equal(await kimooxAPIKey.getAttribute("type"), "password", "Kimoox API Key is not protected");
+      assert.equal(await kimooxAPISecret.getAttribute("type"), "password", "Kimoox API Secret is not protected");
+      const cardType = kimooxConfig.getByRole("combobox", { name: /卡类型/ });
+      const cardGroupID = kimooxConfig.getByRole("textbox", { name: /Card Group ID/ });
+      const budgetID = kimooxConfig.getByRole("textbox", { name: /Budget ID/ });
+      const originalCardType = await cardType.inputValue();
+      await cardType.selectOption("BUDGET");
+      assert.equal(await cardGroupID.isEnabled(), true, "Card Group ID is disabled for BUDGET cards");
+      assert.equal(await budgetID.isEnabled(), true, "Budget ID is disabled for BUDGET cards");
+      await cardType.selectOption("PREPAID");
+      assert.equal(await cardGroupID.isEnabled(), false, "Card Group ID is enabled for PREPAID cards");
+      assert.equal(await budgetID.isEnabled(), false, "Budget ID is enabled for PREPAID cards");
+      await cardType.selectOption(originalCardType);
+      assert.equal(await kimooxConfig.getByText("当前仅支持新的多 BIN 配置字段。", { exact: false }).count(), 1, "multi-BIN configuration help is missing");
+
+      const pollAttempts = kimooxConfig.getByRole("spinbutton", { name: "开卡轮询次数", exact: true });
+      const originalPollAttempts = await pollAttempts.inputValue();
+      const temporaryPollAttempts = String(Number(originalPollAttempts) === 300 ? 299 : Number(originalPollAttempts) + 1);
+      await pollAttempts.fill(temporaryPollAttempts);
+      const saveProviderRequest = page.waitForRequest((request) => request.url().includes("/legacy-api/admin/config") && request.method() === "POST");
+      const saveProviderResponse = page.waitForResponse((response) => response.url().includes("/legacy-api/admin/config") && response.request().method() === "POST" && response.status() === 200);
+      const saveProviderReload = page.waitForResponse((response) => response.url().includes("/legacy-api/admin/config") && response.request().method() === "GET" && response.status() === 200);
+      await providerConfigPanel.getByRole("button", { name: "保存卡池与 Provider 配置", exact: true }).click();
+      const providerRequestBody = JSON.parse((await saveProviderRequest).postData() || "{}");
+      assert.equal(providerRequestBody.kimoox_apply_poll_attempts, temporaryPollAttempts, "Provider save omitted Kimoox polling value");
+      assert.equal(providerRequestBody.card_pool_default_provider, originalDefaultProvider, "Provider save changed the restored default Provider");
+      assert.equal(Object.hasOwn(providerRequestBody, "emailEnabled"), false, "Provider save sent email settings");
+      await Promise.all([saveProviderResponse, saveProviderReload]);
+      await ensureDetailsOpen(kimooxConfig);
+      assert.equal(await pollAttempts.inputValue(), temporaryPollAttempts, "Kimoox polling value was not retained");
+      await pollAttempts.fill(originalPollAttempts);
+      const restoreProviderResponse = page.waitForResponse((response) => response.url().includes("/legacy-api/admin/config") && response.request().method() === "POST" && response.status() === 200);
+      const restoreProviderReload = page.waitForResponse((response) => response.url().includes("/legacy-api/admin/config") && response.request().method() === "GET" && response.status() === 200);
+      await providerConfigPanel.getByRole("button", { name: "保存卡池与 Provider 配置", exact: true }).click();
+      await Promise.all([restoreProviderResponse, restoreProviderReload]);
+      await ensureDetailsOpen(kimooxConfig);
+      assert.equal(await pollAttempts.inputValue(), originalPollAttempts, "Kimoox polling value did not restore");
+      assert.equal(await routingSelect.inputValue(), originalRouting, "routing strategy changed unexpectedly");
+      assert.equal(await defaultProviderSelect.inputValue(), originalDefaultProvider, "default Provider changed unexpectedly");
+      await assertNoPageError(page, "/admin/settings after Kimoox Provider config E2E");
+    } else {
     const cardPoolPanel = page.locator('[data-testid="stripe-issuing-config"]').locator("..");
     const localTextConfig = page.getByTestId("local-text-config");
     const airwallexConfig = page.getByTestId("airwallex-config");
@@ -446,6 +579,7 @@ async function run() {
       assert.equal(await input.isChecked(), originalToggleStates[index], `${label} changed unexpectedly after save`);
     }
     await assertNoPageError(page, "/admin/settings after Provider config E2E");
+    }
 
     const storeProductsLoad = page.waitForResponse((response) =>
       response.url().includes("/platform-api/admin/store/products") &&

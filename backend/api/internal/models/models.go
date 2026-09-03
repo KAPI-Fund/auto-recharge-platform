@@ -132,9 +132,14 @@ type RechargeTask struct {
 	TraceID string `gorm:"index;size:96;not null;default:''" json:"traceId"`
 	// CDKID is nil for admin-only checkout debugging tasks. Customer
 	// redemption tasks keep a concrete CDK foreign-key value.
-	CDKID              *string    `gorm:"index;size:64" json:"cdkId"`
-	PlanID             string     `gorm:"index;size:64;not null" json:"planId"`
-	PoolID             string     `gorm:"index;size:64" json:"poolId"`
+	CDKID  *string `gorm:"index;size:64" json:"cdkId"`
+	PlanID string  `gorm:"index;size:64;not null" json:"planId"`
+	PoolID string  `gorm:"index;size:64" json:"poolId"`
+	// PaymentRegion is captured when the task is created. It prevents a later
+	// global payment-region change from changing the checkout country/currency
+	// of an already queued task. Empty values are retained for legacy rows and
+	// resolved from the linked plan at read time.
+	PaymentRegion      string     `gorm:"index;size:4" json:"paymentRegion"`
 	BusinessAccountID  string     `gorm:"index;size:160" json:"businessAccountId"`
 	UsageType          string     `gorm:"index;size:24" json:"usageType"`
 	PaymentCardID      string     `gorm:"index;size:64" json:"paymentCardId"`

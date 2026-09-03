@@ -143,7 +143,7 @@ export async function saveAdminConfig(config: Record<string, string>) {
   return request<{ ok: boolean }>("/admin/config", { method: "PUT", body: JSON.stringify(config) });
 }
 
-export type StoreProductOption = { value: string; code?: string; label: string };
+export type StoreProductOption = { value: string; code?: string; label: string; countryLabel?: string; currency?: string };
 export type StoreProductOptions = {
   currency: string;
   providerPlans: StoreProductOption[];

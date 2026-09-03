@@ -596,6 +596,10 @@ export function getBillingSummary(last4: string) {
 export function getConfig() {
   return legacyRequest<JsonMap>("/admin/config");
 }
+
+export function getKimooxCardBINs() {
+  return legacyRequest<{ success: boolean; provider: string; bins: JsonMap[] }>("/card-providers/kimoox/bins");
+}
 export function saveConfig(body: JsonMap) {
   return legacyRequest<JsonMap>("/admin/config", {
     method: "POST",

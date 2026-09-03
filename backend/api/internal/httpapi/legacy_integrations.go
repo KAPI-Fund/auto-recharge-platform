@@ -21,6 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/db"
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/models"
+	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/paymentregion"
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/queue"
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/security"
 	"gorm.io/gorm"
@@ -1046,8 +1047,11 @@ func minInt(left, right int) int {
 
 func (s *Server) legacyCheckoutPlans(c *gin.Context) {
 	region := strings.ToUpper(s.configValue("payment_region", "PH"))
+	if !paymentregion.IsSupported(region) {
+		region = paymentregion.Default().Code
+	}
 	_, label := regionBilling(region)
-	plans := gin.H{"plus": "chatgptplusplan", "pro_5x": "chatgptprolite", "pro_20x": "chatgptpro"}
+	plans := gin.H{"plus": "chatgptplusplan", "pro_5x": "chatgptprolite", "pro_20x": "chatgptpro", "go": "chatgptgoplan"}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true, "plans": plans, "resolved": plans, "planOptions": legacyCheckoutPlanOptions(),
 		"region": region, "currency": regionCurrency(region), "label": label, "regionOptions": legacyRegionOptions(),
@@ -1060,6 +1064,7 @@ func legacyCheckoutPlanOptions() []gin.H {
 		{"value": "plus", "code": "plus", "label": "Plus", "planName": "chatgptplusplan"},
 		{"value": "pro_5x", "code": "pro_5x", "label": "Pro 5x", "planName": "chatgptprolite"},
 		{"value": "pro_20x", "code": "pro_20x", "label": "Pro 20x", "planName": "chatgptpro"},
+		{"value": "go", "code": "go", "label": "ChatGPT Go", "planName": "chatgptgoplan"},
 	}
 }
 
@@ -1089,7 +1094,7 @@ func (s *Server) legacyCheckoutGenerate(c *gin.Context) {
 	// canonical enum value.
 	planNameOverride := db.NormalizeProviderPlanName(planType, stringValue(input, "plan_name"))
 	region := strings.ToUpper(firstNonEmpty(stringValue(input, "country"), stringValue(input, "region"), s.configValue("payment_region", "PH")))
-	if !map[string]bool{"PH": true, "US": true, "SG": true, "MY": true}[region] {
+	if !paymentregion.IsSupported(region) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "不支持的地区"})
 		return
 	}
@@ -1125,7 +1130,7 @@ func (s *Server) legacyCheckoutGenerate(c *gin.Context) {
 	if mode == "protocol" {
 		queuedMessage = "协议调试任务已排队"
 	}
-	task := models.RechargeTask{ID: db.NewID("task"), JobKey: db.NewID("job"), TraceID: requestTraceID(c), PlanID: plan.ID, Mode: mode, TokenPreview: security.SessionPreview(sessionToken), SessionPreview: security.SessionPreview(sessionToken), SessionCiphertext: ciphertext, AdmissionToken: admissionToken, PlanNameOverride: planNameOverride, CDKCode: "[checkout-debug]", Status: models.TaskQueued, Progress: 5, Message: queuedMessage, DisplayTime: now.Format("2006-01-02 15:04:05"), QueueDeadlineAt: &queueDeadline}
+	task := models.RechargeTask{ID: db.NewID("task"), JobKey: db.NewID("job"), TraceID: requestTraceID(c), PlanID: plan.ID, PaymentRegion: region, Mode: mode, TokenPreview: security.SessionPreview(sessionToken), SessionPreview: security.SessionPreview(sessionToken), SessionCiphertext: ciphertext, AdmissionToken: admissionToken, PlanNameOverride: planNameOverride, CDKCode: "[checkout-debug]", Status: models.TaskQueued, Progress: 5, Message: queuedMessage, DisplayTime: now.Format("2006-01-02 15:04:05"), QueueDeadlineAt: &queueDeadline}
 	if err := s.DB.Transaction(func(tx *gorm.DB) error {
 		if err := s.checkActivationCapacityTx(tx); err != nil {
 			return err
@@ -1184,16 +1189,10 @@ func extractCheckoutURL(value string) string {
 }
 
 func regionCurrency(region string) string {
-	switch strings.ToUpper(region) {
-	case "PH":
-		return "PHP"
-	case "SG":
-		return "SGD"
-	case "MY":
-		return "MYR"
-	default:
-		return "USD"
+	if value, ok := paymentregion.Get(region); ok {
+		return value.Currency
 	}
+	return paymentregion.Default().Currency
 }
 
 func normalizeProxyValue(value string) (string, string, string, string, error) {

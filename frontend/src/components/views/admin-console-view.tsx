@@ -112,6 +112,7 @@ import {
   getGPTStatus,
   getHcaptchaConfig,
   getHcaptchaLogs,
+  getKimooxCardBINs,
   getLoginLogs,
   getPhones,
   getPoolEmails,
@@ -196,6 +197,7 @@ type ProviderConfigKey =
 
 // The current admin UI is intentionally scoped to Kimoox while the other
 // adapters remain registered in the Go backend for backward compatibility.
+const visibleCardProviders = ["LOCAL_TEXT", "KIMOOX"] as const;
 const visibleCardProvider = "KIMOOX" as const;
 
 const inputClass =
@@ -271,7 +273,7 @@ const providerConfigKeys = [
   "kimoox_api_key",
   "kimoox_api_secret",
   "kimoox_webhook_secret",
-  "kimoox_card_bin_id",
+  "kimoox_card_bin_ids",
   "kimoox_card_type",
   "kimoox_cardholder_id",
   "kimoox_holder_id",
@@ -1868,6 +1870,8 @@ function ConfigPanel({
   const [diagnosticsBusy, setDiagnosticsBusy] = useState(false);
   const [emailTestRecipient, setEmailTestRecipient] = useState("");
   const [openProviderConfig, setOpenProviderConfig] = useState<ProviderConfigKey | null>(null);
+  const [kimooxBins, setKimooxBins] = useState<Row[]>([]);
+  const [kimooxBinsBusy, setKimooxBinsBusy] = useState(false);
   const [pathForm, setPathForm] = useState({
     login: text(securityStatus, "loginPath", "admin-login"),
     panel: text(securityStatus, "panelPath", "admin"),
@@ -2076,6 +2080,31 @@ function ConfigPanel({
   const toggleProviderConfig = (provider: ProviderConfigKey) => {
     setOpenProviderConfig((current) => (current === provider ? null : provider));
   };
+  const selectedKimooxBINs = () => {
+    const configured = field("kimoox_card_bin_ids");
+    return configured
+      .replace(/^\[/, "")
+      .replace(/\]$/, "")
+      .split(/[\s,;]+/)
+      .map((value) => value.replace(/^['"]|['"]$/g, "").trim())
+      .filter(Boolean);
+  };
+  const loadKimooxBINs = async () => {
+    setKimooxBinsBusy(true);
+    try {
+      const result = await getKimooxCardBINs();
+      setKimooxBins(rows(result.bins));
+      setNotice(`已读取 ${result.bins.length} 个 Kimoox BIN`);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setKimooxBinsBusy(false);
+    }
+  };
+  const updateKimooxBINs = (values: string[]) => {
+    const unique = Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+    update("kimoox_card_bin_ids", unique.join(","));
+  };
   return (
     <div className="config-page">
       <LegacyConfigPanel title="第三方代充 API（协议对接）" className="config-gpt">
@@ -2158,8 +2187,9 @@ function ConfigPanel({
           </label>
           <label>
             默认 Provider
-            <select value={defaultProvider === visibleCardProvider ? visibleCardProvider : ""} onChange={(event) => updateDefaultProvider(event.target.value)} className="asset-input">
-              <option value="" disabled>{defaultProvider && defaultProvider !== visibleCardProvider ? "当前配置的 Provider 暂未在页面开放" : "请选择 Provider"}</option>
+            <select value={visibleCardProviders.includes(defaultProvider as typeof visibleCardProviders[number]) ? defaultProvider : ""} onChange={(event) => updateDefaultProvider(event.target.value)} className="asset-input">
+              <option value="" disabled>{defaultProvider && !visibleCardProviders.includes(defaultProvider as typeof visibleCardProviders[number]) ? "当前配置的 Provider 暂未在页面开放" : "请选择 Provider"}</option>
+              <option value="LOCAL_TEXT" disabled={providerOptionDisabled("LOCAL_TEXT")}>LOCAL_TEXT（本地文本卡池）</option>
               <option value={visibleCardProvider} disabled={providerOptionDisabled(visibleCardProvider)}>KIMOOX</option>
             </select>
           </label>
@@ -2173,10 +2203,11 @@ function ConfigPanel({
           </label>
         </div>
         <div className="config-toggle-list">
+          <ConfigToggle label="启用 LOCAL_TEXT" checked={providerIsEnabled("LOCAL_TEXT")} disabled={defaultProvider === "LOCAL_TEXT"} onChange={(checked) => updateProviderEnabled("LOCAL_TEXT", checked)} description={providerDescription("LOCAL_TEXT", "兼容现有 TXT / CSV 导入卡池；卡片在银行卡池页面管理。")} />
           <ConfigToggle label="启用 KIMOOX" checked={providerIsEnabled(visibleCardProvider)} disabled={defaultProvider === visibleCardProvider} onChange={(checked) => updateProviderEnabled(visibleCardProvider, checked)} description={providerDescription(visibleCardProvider, "Kimoox VCC Open API 适配器，建议先使用文档要求的环境和卡 BIN。")} />
         </div>
         <div className="config-provider-accordions" data-testid="provider-config-accordions">
-        <details hidden className="config-provider-section config-provider-local-text" data-testid="local-text-config" open={openProviderConfig === "LOCAL_TEXT"}>
+        <details className="config-provider-section config-provider-local-text" data-testid="local-text-config" open={openProviderConfig === "LOCAL_TEXT"}>
           <summary className="config-provider-section-heading config-provider-summary" aria-expanded={openProviderConfig === "LOCAL_TEXT"} aria-controls="provider-config-local-text" onClick={(event) => { event.preventDefault(); toggleProviderConfig("LOCAL_TEXT"); }}>
             <div>
               <h3>LOCAL_TEXT 本地文本卡池配置</h3>
@@ -2365,12 +2396,23 @@ function ConfigPanel({
             <label>Kimoox Base URL<input value={field("kimoox_base_url", "https://card.kimoox.com")} onChange={(event) => update("kimoox_base_url", event.target.value)} className="asset-input" /></label>
             <label>API Key<input type="password" value={field("kimoox_api_key")} onChange={(event) => update("kimoox_api_key", event.target.value)} className="asset-input" placeholder={bool(settings, "kimooxAPIKeySavedValue") ? "已配置，输入新值可替换" : "API Key"} autoComplete="new-password" /></label>
             <label>API Secret<input type="password" value={field("kimoox_api_secret")} onChange={(event) => update("kimoox_api_secret", event.target.value)} className="asset-input" placeholder={bool(settings, "kimooxAPISecretSavedValue") ? "已配置，输入新值可替换" : "API Secret"} autoComplete="new-password" /></label>
-            <label>Card BIN ID<input value={field("kimoox_card_bin_id")} onChange={(event) => update("kimoox_card_bin_id", event.target.value)} className="asset-input" placeholder="Provider 分配的数字 BIN ID" /></label>
-            <label>卡类型<select value={field("kimoox_card_type", "PREPAID")} onChange={(event) => update("kimoox_card_type", event.target.value)} className="asset-input"><option value="PREPAID">PREPAID 储值卡</option><option value="BUDGET">BUDGET 预算卡</option></select></label>
+            <label className="config-field-span-2">Card BIN（可多选）
+              {kimooxBins.length ? <div className="config-multiselect" data-testid="kimoox-bin-options">
+                {kimooxBins.map((bin) => {
+                  const id = text(bin, "id", text(bin, "binId"));
+                  const checked = selectedKimooxBINs().includes(id);
+                  return <label key={id} className="config-multiselect-option"><input type="checkbox" checked={checked} onChange={(event) => updateKimooxBINs(event.target.checked ? [...selectedKimooxBINs(), id] : selectedKimooxBINs().filter((value) => value !== id))} /><span>{id}{text(bin, "name", "") ? ` · ${text(bin, "name")}` : ""}{text(bin, "cardType", "") ? ` · ${text(bin, "cardType")}` : ""}</span></label>;
+                })}
+              </div> : null}
+              <div className="config-actions-row config-actions-row-inline"><Button type="button" variant="outline" onClick={() => void loadKimooxBINs()} disabled={kimooxBinsBusy || !providerIsEnabled(visibleCardProvider)}><RefreshCw className={cn("h-4 w-4", kimooxBinsBusy && "animate-spin")} />{kimooxBinsBusy ? "读取中…" : "读取可用 BIN"}</Button></div>
+              <input value={field("kimoox_card_bin_ids")} onChange={(event) => update("kimoox_card_bin_ids", event.target.value)} className="asset-input" placeholder="例如 1001,1002；也支持换行填写" />
+              <p className="config-help">保存后每次开卡会从已选 BIN 中稳定选择一个；同一幂等任务重试不会随机换 BIN。当前仅支持新的多 BIN 配置字段。</p>
+            </label>
+            <label>卡类型<select value={field("kimoox_card_type", "PREPAID")} onChange={(event) => update("kimoox_card_type", event.target.value)} className="asset-input"><option value="PREPAID">PREPAID 储值卡</option><option value="BUDGET">BUDGET 预算卡</option></select><p className="config-help">PREPAID 需要首充金额；BUDGET 需要同时填写 Card Group ID 和 Budget ID。</p></label>
             <label>Cardholder ID（可选）<input value={field("kimoox_cardholder_id")} onChange={(event) => update("kimoox_cardholder_id", event.target.value)} className="asset-input" placeholder="数字 ID；也可使用 Holder ID" /></label>
             <label>Holder ID（可选）<input value={field("kimoox_holder_id")} onChange={(event) => update("kimoox_holder_id", event.target.value)} className="asset-input" /></label>
-            <label>Card Group ID（BUDGET 必填）<input value={field("kimoox_card_group_id")} onChange={(event) => update("kimoox_card_group_id", event.target.value)} className="asset-input" /></label>
-            <label>Budget ID（BUDGET 必填）<input value={field("kimoox_budget_id")} onChange={(event) => update("kimoox_budget_id", event.target.value)} className="asset-input" /></label>
+            <label>Card Group ID（BUDGET 必填）<input disabled={field("kimoox_card_type", "PREPAID") !== "BUDGET"} value={field("kimoox_card_group_id")} onChange={(event) => update("kimoox_card_group_id", event.target.value)} className="asset-input" /></label>
+            <label>Budget ID（BUDGET 必填）<input disabled={field("kimoox_card_type", "PREPAID") !== "BUDGET"} value={field("kimoox_budget_id")} onChange={(event) => update("kimoox_budget_id", event.target.value)} className="asset-input" /></label>
             <label>Webhook 容差（秒）<input type="number" min={1} max={86400} value={field("kimoox_webhook_tolerance_seconds", "300")} onChange={(event) => update("kimoox_webhook_tolerance_seconds", event.target.value)} className="asset-input" /></label>
             <label>开卡轮询次数<input type="number" min={1} max={300} value={field("kimoox_apply_poll_attempts", "30")} onChange={(event) => update("kimoox_apply_poll_attempts", event.target.value)} className="asset-input" /></label>
             <label>开卡轮询间隔（秒）<input type="number" min={0} max={300} value={field("kimoox_apply_poll_interval_seconds", "2")} onChange={(event) => update("kimoox_apply_poll_interval_seconds", event.target.value)} className="asset-input" /></label>
@@ -2451,9 +2493,20 @@ function ConfigPanel({
           {text(totp, "secret", "") ? <div className="config-totp-box"><img src={text(totp, "qrCodeUrl", text(totp, "qr_code", ""))} alt="Google Authenticator QR" /><div className="config-totp-secret"><div>请用 Google Authenticator 扫描上方二维码</div><div>手动密钥：<code>{text(totp, "secret", "")}</code></div></div><input type="text" inputMode="numeric" maxLength={6} value={text(totp, "code", "")} onChange={(event) => setTotp({ ...totp, code: event.target.value })} className="asset-input" placeholder="输入 Authenticator 6 位码确认" /><Button className="config-inline-button" onClick={() => void confirm()}>确认启用</Button></div> : null}
         </div>
       </LegacyConfigPanel>
-      <LegacyConfigPanel title="支付地区设置">
-        <p className="config-description config-description-top">选择支付地区后，系统将使用对应的币种进行 Stripe 支付。账单地址请在左侧「免税地址」页面管理。</p>
-        <div className="config-region-row"><label>当前支付地区<select value={region} onChange={(event) => setRegion(event.target.value)} className="asset-input">{regionOptions.map((option) => <option key={text(option, "value", text(option, "code"))} value={text(option, "value", text(option, "code"))}>{text(option, "label")}</option>)}</select></label><Button onClick={() => void saveRegionValue()}><Save className="h-4 w-4" />保存地区</Button><span className="status-badge status-success">当前: {text(regionInfo, "label", region)} / {text(regionInfo, "currency", "")}</span></div>
+      <LegacyConfigPanel title="默认支付地区（兼容旧商品）">
+        <p className="config-description config-description-top">仅用于旧商品未配置支付地区时的默认值，以及支付链接调试的初始值。已配置商品地区时，以商品自身地区为准；账单地址请在左侧「免税地址」页面管理。</p>
+        <div className="config-region-row">
+          <SearchableRegionSelect
+            id="global_payment_region_selector"
+            label="默认支付地区"
+            value={region}
+            options={regionOptions}
+            onChange={setRegion}
+            labelClassName="config-region-select-label"
+          />
+          <Button onClick={() => void saveRegionValue()}><Save className="h-4 w-4" />保存地区</Button>
+          <span className="status-badge status-success">当前: {text(regionInfo, "label", region)} / {text(regionInfo, "currency", "")}</span>
+        </div>
       </LegacyConfigPanel>
       <LegacyConfigPanel title="平台售卡与 Stripe" className="config-platform">
         <p className="config-description config-description-top">平台购买调试模式仅影响站内 CDK 售卡；Worker 支付流程仍按原版执行。</p>
@@ -3285,15 +3338,13 @@ function CheckoutPanel({ checkoutPlans, setNotice, setError, navigate }: Content
             <label htmlFor="checkout_plan_name">plan_name（自动跟随套餐，可手动改）</label>
             <input id="checkout_plan_name" value={planName} onChange={(event) => setPlanName(event.target.value)} className="asset-input" placeholder="chatgptplusplan" autoComplete="off" />
           </div>
-          <div className="form-group">
-            <label htmlFor="checkout_region_selector">支付地区</label>
-            <select id="checkout_region_selector" value={region} onChange={(event) => setRegion(event.target.value)} className="asset-input">
-              {regionOptions.map((option) => {
-                const value = text(option, "value", text(option, "code"));
-                return <option key={value} value={value}>{text(option, "label")}</option>;
-              })}
-            </select>
-          </div>
+          <SearchableRegionSelect
+            id="checkout_region_selector"
+            label="调试支付地区"
+            value={region}
+            options={regionOptions}
+            onChange={setRegion}
+          />
         </div>
         <p className="checkout-debug-region-hint">将使用: {text(selectedRegion, "countryLabel", text(selectedRegion, "label", region))} / {text(selectedRegion, "currency", text(checkoutPlans, "currency", ""))}</p>
         <div className="form-group checkout-debug-session-group">
@@ -3483,7 +3534,7 @@ function CardsPanel({
         <DataTable
           data={cardRows}
           empty="暂无卡片，请使用批量导入添加"
-          minWidth={0}
+          minWidth={1860}
           tableClassName="cards-table"
           columns={[
             { key: "provider", label: "Provider", render: (row) => text(row, "provider", "LOCAL_TEXT") },
@@ -3645,7 +3696,14 @@ function StoreProductsPanel({ storeProductRows, setStoreProductRows, storeProduc
         <label className="text-xs font-semibold text-slate-600">商品编码<input value={form.code} disabled={Boolean(editingCode)} onChange={(event) => update("code", event.target.value)} placeholder="plus" className={inputClass} /></label>
         <label className="text-xs font-semibold text-slate-600">商品名称<input value={form.name} onChange={(event) => update("name", event.target.value)} placeholder="ChatGPT Plus" className={inputClass} /></label>
         <label className="text-xs font-semibold text-slate-600">关联原版套餐<select value={form.providerPlanName} onChange={(event) => update("providerPlanName", event.target.value)} className={inputClass}>{providerPlans.map((item) => <option key={text(item, "value", text(item, "code"))} value={text(item, "value", text(item, "code"))}>{text(item, "label")}</option>)}</select></label>
-        <label className="text-xs font-semibold text-slate-600">开通地区<select value={form.country} onChange={(event) => update("country", event.target.value)} className={inputClass}>{countries.map((item) => <option key={text(item, "value", text(item, "code"))} value={text(item, "value", text(item, "code"))}>{text(item, "label")}</option>)}</select></label>
+        <SearchableRegionSelect
+          id="store_product_region"
+          label="商品支付地区"
+          value={form.country}
+          options={countries}
+          onChange={(value) => update("country", value)}
+          labelClassName="text-xs font-semibold text-slate-600"
+        />
         <label className="text-xs font-semibold text-slate-600">价格<input type="number" min="0.01" step="0.01" value={form.price} onChange={(event) => update("price", event.target.value)} className={inputClass} /></label>
         <label className="text-xs font-semibold text-slate-600">可售数量（0=不限量）<input type="number" min="0" step="1" value={form.saleLimit} onChange={(event) => update("saleLimit", event.target.value)} className={inputClass} /></label>
         <label className="text-xs font-semibold text-slate-600">平台售卡币种<select value={currency} disabled className={inputClass}><option value={currency}>{currency}</option></select></label>
@@ -3711,6 +3769,95 @@ function CdkFilterDropdown({
               {option.label}
             </button>
           ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SearchableRegionSelect({
+  id,
+  label,
+  value,
+  options,
+  onChange,
+  labelClassName = "text-xs font-semibold text-slate-600",
+}: {
+  id: string;
+  label: string;
+  value: string;
+  options: Row[];
+  onChange: (value: string) => void;
+  labelClassName?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const rootRef = useRef<HTMLDivElement>(null);
+  const selected = options.find((option) => text(option, "value", text(option, "code")) === value);
+  const normalizedQuery = query.trim().toLowerCase();
+  const filtered = options.filter((option) => {
+    if (!normalizedQuery) return true;
+    return [text(option, "label", ""), text(option, "countryLabel", ""), text(option, "code", text(option, "value", "")), text(option, "currency", "")]
+      .join(" ")
+      .toLowerCase()
+      .includes(normalizedQuery);
+  });
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: globalThis.MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+  useEffect(() => {
+    if (!open) setQuery("");
+  }, [open]);
+  return (
+    <div ref={rootRef} className="searchable-region-select" data-testid={`${id}-searchable-select`}>
+      <div className={cn("searchable-region-select-label", labelClassName)}>
+        <span>{label}</span>
+        <button
+          id={id}
+          type="button"
+          className="searchable-region-select-trigger"
+          onClick={() => setOpen((current) => !current)}
+          aria-expanded={open}
+          aria-haspopup="listbox"
+        >
+          <span className={cn("searchable-region-select-value", !selected && "placeholder")}>{selected ? text(selected, "label") : "请选择支付地区"}</span>
+          <ChevronDown className={cn("searchable-region-select-chevron", open && "open")} />
+        </button>
+      </div>
+      {open ? (
+        <div className="searchable-region-select-menu" role="listbox">
+          <input
+            autoFocus
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => { if (event.key === "Escape") setOpen(false); }}
+            className="searchable-region-select-search"
+            placeholder="搜索国家、地区代码或币种"
+            aria-label={`${label}搜索`}
+          />
+          <div className="searchable-region-select-options">
+            {filtered.length ? filtered.map((option) => {
+              const optionValue = text(option, "value", text(option, "code"));
+              return (
+                <button
+                  type="button"
+                  key={optionValue}
+                  role="option"
+                  aria-selected={optionValue === value}
+                  className={cn("searchable-region-select-option", optionValue === value && "selected")}
+                  onClick={() => { onChange(optionValue); setOpen(false); }}
+                >
+                  <span className="searchable-region-select-option-main">{text(option, "label", optionValue)}</span>
+                  <span className="searchable-region-select-option-meta">{optionValue} · {text(option, "currency", "")}</span>
+                </button>
+              );
+            }) : <div className="px-2 py-3 text-sm text-slate-500">没有匹配的支付地区</div>}
+          </div>
         </div>
       ) : null}
     </div>

@@ -15,6 +15,7 @@ import (
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/config"
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/db"
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/models"
+	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/paymentregion"
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/queue"
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/security"
 	"gorm.io/gorm"
@@ -77,6 +78,7 @@ func NewRouter(server *Server) *gin.Engine {
 	admin.PATCH("/card-pools/:id", server.updateCardPool)
 	admin.GET("/billing", server.adminBilling)
 	admin.GET("/config", server.getConfig)
+	admin.GET("/card-providers/kimoox/bins", server.legacyKimooxCardBINs)
 	admin.PUT("/config", server.saveConfig)
 	admin.POST("/email/test", server.legacyTestEmail)
 
@@ -277,6 +279,7 @@ func (s *Server) createTask(c *gin.Context) {
 			CDKID:             &cdkID,
 			PlanID:            cdk.PlanID,
 			PoolID:            strings.TrimSpace(input.PoolID),
+			PaymentRegion:     paymentregion.Normalize(cdk.Plan.Country),
 			BusinessAccountID: strings.TrimSpace(input.BusinessAccountID),
 			UsageType:         strings.ToUpper(strings.TrimSpace(input.UsageType)),
 			Mode:              mode,
@@ -392,7 +395,14 @@ func (s *Server) taskSecret(c *gin.Context) {
 	planType := firstNonEmpty(cdk.PlanType, plan.Code, "plus")
 	planName := db.NormalizeProviderPlanName(planType, firstNonEmpty(task.PlanNameOverride, cdk.Plan.ProviderPlanName, plan.ProviderPlanName, plan.Code, planType))
 	cdkCode := firstNonEmpty(cdk.Code, task.CDKCode)
-	c.JSON(http.StatusOK, gin.H{"taskId": task.ID, "jobKey": task.JobKey, "traceId": task.TraceID, "trace_id": task.TraceID, "session": secret, "token": token, "mode": task.Mode, "planId": task.PlanID, "planType": planType, "cdkCode": cdkCode, "region": s.configValue("payment_region", "PH"), "planName": planName})
+	region := paymentregion.Normalize(task.PaymentRegion)
+	if region == "" {
+		region = paymentregion.Normalize(plan.Country)
+	}
+	if region == "" {
+		region = paymentregion.Normalize(s.configValue("payment_region", paymentregion.Default().Code))
+	}
+	c.JSON(http.StatusOK, gin.H{"taskId": task.ID, "jobKey": task.JobKey, "traceId": task.TraceID, "trace_id": task.TraceID, "session": secret, "token": token, "mode": task.Mode, "planId": task.PlanID, "planType": planType, "cdkCode": cdkCode, "region": region, "paymentRegion": region, "currency": regionCurrency(region), "planName": planName})
 }
 
 func (s *Server) updateTask(c *gin.Context) {

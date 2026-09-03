@@ -57,7 +57,7 @@ func TestServiceConcurrentIdempotentAllocationUsesOneProviderCard(t *testing.T) 
 	}
 
 	poolID := db.NewID("pool_test")
-	pool := models.CardPool{ID: poolID, Name: poolID, Type: string(PoolTypeExternalAPI), UsageType: string(UsageOneTime), Currency: "USD", RoutingStrategy: string(RoutingFixed), DefaultProvider: "TEST_PROVIDER", Enabled: true}
+	pool := models.CardPool{ID: poolID, Name: poolID, Type: string(PoolTypeExternalAPI), UsageType: string(UsageOneTime), CardCreationMode: string(CardCreationOnDemand), Currency: "USD", RoutingStrategy: string(RoutingFixed), DefaultProvider: "TEST_PROVIDER", Enabled: true}
 	providerRow := models.CardPoolProvider{ID: db.NewID("pool_provider_test"), PoolID: poolID, Provider: "TEST_PROVIDER", Enabled: true, Priority: 1, Weight: 100}
 	if err := database.Create(&pool).Error; err != nil {
 		t.Fatalf("create pool: %v", err)

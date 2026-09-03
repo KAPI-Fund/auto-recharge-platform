@@ -39,8 +39,11 @@ async function run() {
     assert.equal(styles.legacyStylesheetCount, 0, `${label} still loads the legacy blue stylesheet`);
     assert.equal(styles.dynamicStorefrontCount, 0, `${label} still injects a dynamic storefront stylesheet`);
     assert.equal((await page.locator("body").innerText()).includes("当前账单地区："), false, `${label} still exposes the billing region hint`);
-    if (styles.mainBackground) assert.equal(styles.mainBackground, "rgb(247, 248, 251)", `${label} has the wrong page background`);
-    if (styles.primaryButton) assert.equal(styles.primaryButton, "rgb(15, 118, 110)", `${label} has the wrong primary button color`);
+    if (styles.mainBackground) assert.equal(styles.mainBackground, "rgb(243, 246, 252)", `${label} has the wrong page background`);
+    if (styles.primaryButton) {
+      assert.equal(styles.primaryButton, "rgb(231, 111, 81)", `${label} has the wrong primary button color`);
+      assert.notEqual(styles.primaryButton, "rgb(15, 118, 110)", `${label} regressed to the old green theme`);
+    }
   }
 
   try {
@@ -116,7 +119,7 @@ async function run() {
     assert.equal(await sessionGuide.count(), 1, "redeem flow did not render the Session guide");
     assert.match(await sessionGuide.innerText(), /请先登录 ChatGPT.*官方 Session 页面/s, "Session guide is missing the first instruction");
     assert.match(await sessionGuide.innerText(), /全选复制页面中的完整 JSON.*返回本页粘贴/s, "Session guide is missing the return-and-paste instruction");
-    const sessionLink = sessionGuide.getByRole("link", { name: /获取 Session/ });
+    const sessionLink = sessionGuide.getByRole("link", { name: /打开 Session 页面/ });
     assert.equal(await sessionLink.getAttribute("href"), "https://chatgpt.com/api/auth/session", "Session guide points to the wrong endpoint");
     assert.equal(await sessionLink.getAttribute("target"), "_blank", "Session guide should open the official endpoint in a new tab");
     const sessionPopupPromise = page.waitForEvent("popup");
