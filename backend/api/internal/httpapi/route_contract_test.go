@@ -45,6 +45,7 @@ func TestLegacyRouteSurfaceMatchesReference(t *testing.T) {
 		"GET /api/admin/data",
 		"GET /api/admin/config",
 		"POST /api/admin/config",
+		"GET /api/admin/card-providers/kimoox/bins",
 		"POST /api/admin/email/test",
 		"GET /api/admin/region",
 		"PUT /api/admin/region",
@@ -129,7 +130,7 @@ func TestLegacyRouteSurfaceMatchesReference(t *testing.T) {
 			t.Errorf("reference route is missing: %s", route)
 		}
 	}
-	if len(expected) != 103 {
+	if len(expected) != 104 {
 		t.Fatalf("route contract test itself is incomplete: listed %d routes", len(expected))
 	}
 
@@ -152,6 +153,7 @@ func TestLegacyRouteSurfaceMatchesReference(t *testing.T) {
 		"POST /api/v1/webhooks/cards/dogpay",
 		"POST /api/v1/webhooks/cards/kimoox",
 		"POST /api/v1/admin/email/test",
+		"GET /api/v1/admin/card-providers/kimoox/bins",
 		"POST /api/v1/recharge/verify",
 		"POST /api/v1/recharge/tasks",
 		"GET /api/v1/recharge/tasks/:id",

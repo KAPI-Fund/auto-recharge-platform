@@ -118,6 +118,7 @@ func createIntegrationPool(t *testing.T, database *gorm.DB, usage UsageType, pro
 func cleanupIntegrationPool(database *gorm.DB, poolID string) {
 	database.Where("pool_id = ?", poolID).Delete(&models.CardAllocation{})
 	database.Where("pool_id = ?", poolID).Delete(&models.PaymentCard{})
+	database.Where("pool_id = ?", poolID).Delete(&models.CardProvisionRequest{})
 	database.Where("pool_id = ?", poolID).Delete(&models.CardAsset{})
 	database.Where("pool_id = ?", poolID).Delete(&models.CardPoolProvider{})
 	database.Delete(&models.CardPool{}, "id = ?", poolID)
@@ -416,7 +417,7 @@ func TestManualCreateDoesNotResurrectConsumedProviderCard(t *testing.T) {
 		t.Fatalf("create manual terminal card: %v", err)
 	}
 
-	_, err := service.CreateCard(context.Background(), CreateCardRequest{PoolID: poolID, Provider: provider.ProviderName(), IdempotencyKey: "manual-terminal-create"})
+	_, err := service.CreateCard(context.Background(), CreateCardRequest{PoolID: poolID, Provider: provider.ProviderName(), IdempotencyKey: db.NewID("manual-terminal-create")})
 	if !errors.Is(err, ErrCardConsumed) {
 		t.Fatalf("manual create terminal provider card error = %v, want ErrCardConsumed", err)
 	}

@@ -11,9 +11,11 @@ func TestProviderPlanNameForCodeMatchesLegacyCheckoutMapping(t *testing.T) {
 		"plus":            "chatgptplusplan",
 		"pro_5x":          "chatgptprolite",
 		"pro_20x":         "chatgptpro",
+		"go":              "chatgptgoplan",
 		"chatgptplusplan": "chatgptplusplan",
 		"chatgptprolite":  "chatgptprolite",
 		"chatgptpro":      "chatgptpro",
+		"chatgptgoplan":   "chatgptgoplan",
 	}
 	for input, want := range tests {
 		if got := ProviderPlanNameForCode(input); got != want {

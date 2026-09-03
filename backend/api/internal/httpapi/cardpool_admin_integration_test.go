@@ -140,7 +140,9 @@ func TestAdminCardListMasksSensitiveCardFields(t *testing.T) {
 
 func TestAdminCardListIncludesProviderCardsInPrimaryCardsCollection(t *testing.T) {
 	database := openHTTPIntegrationDatabase(t)
-	prefix := db.NewID("admin_provider_cards")
+	// Keep fixture IDs within payment_cards.id varchar(64) while retaining
+	// uniqueness across repeated runs against the shared integration database.
+	prefix := db.NewID("admin_pc")
 	providerCards := []models.PaymentCard{
 		{ID: prefix + "-active", PoolID: "pool_provider", Provider: "AIRWALLEX", ProviderCardID: "aw-active", Last4: "1111", UsageType: "ONE_TIME", Status: "ACTIVE"},
 		{ID: prefix + "-used", PoolID: "pool_provider", Provider: "STRIPE_ISSUING", ProviderCardID: "ii-used", Last4: "2222", UsageType: "ONE_TIME", Status: "USED", UsageCount: 1},
@@ -182,7 +184,10 @@ func TestAdminCardListIncludesProviderCardsInPrimaryCardsCollection(t *testing.T
 		if item["provider"] != card.Provider || item["last4"] != card.Last4 || item["status"] != card.Status {
 			t.Fatalf("provider card projection = %#v, want provider=%s last4=%s status=%s", item, card.Provider, card.Last4, card.Status)
 		}
-		for _, key := range []string{"card_number", "cardNumber", "number", "expiry", "card_expiry", "cvc", "card_cvc", "cvv"} {
+		if item["card_number"] != "**** **** **** "+card.Last4 {
+			t.Fatalf("provider card list card_number mask = %#v, want masked last4", item["card_number"])
+		}
+		for _, key := range []string{"cardNumber", "number", "expiry", "card_expiry", "cvc", "card_cvc", "cvv"} {
 			if _, present := item[key]; present {
 				t.Fatalf("provider card list exposed sensitive field %q: %#v", key, item)
 			}

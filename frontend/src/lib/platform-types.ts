@@ -5,6 +5,8 @@ export type Plan = {
   description: string;
   providerPlanName: string;
   country: string;
+  paymentRegion?: string;
+  paymentCurrency?: string;
   currency: string;
   price: number;
   active: boolean;

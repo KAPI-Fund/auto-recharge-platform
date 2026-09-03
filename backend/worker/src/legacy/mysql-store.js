@@ -57,7 +57,8 @@ const ASSET_LOCK_STALE_MS = Number(process.env.ASSET_LOCK_STALE_MS || 15 * 60 * 
 const PLAN_NAME_MAP = {
     plus: 'chatgptplusplan',
     pro_5x: 'chatgptprolite',
-    pro_20x: 'chatgptpro'
+    pro_20x: 'chatgptpro',
+    go: 'chatgptgoplan'
 };
 
 const VALID_PLAN_TYPES = new Set(Object.keys(PLAN_NAME_MAP));

@@ -106,7 +106,8 @@ async function call(action, body = {}) {
 const PLAN_NAME_MAP = Object.freeze({
   plus: 'chatgptplusplan',
   pro_5x: 'chatgptprolite',
-  pro_20x: 'chatgptpro'
+  pro_20x: 'chatgptpro',
+  go: 'chatgptgoplan'
 });
 
 function resolvePlanName(planType) {

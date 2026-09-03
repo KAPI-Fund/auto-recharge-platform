@@ -15,6 +15,9 @@ func Open(databaseURL string) (*gorm.DB, error) {
 }
 
 func Migrate(database *gorm.DB) error {
+	if err := prepareRechargeTaskPaymentRegion(database); err != nil {
+		return err
+	}
 	if err := prepareRechargeTaskKeys(database); err != nil {
 		return err
 	}
@@ -78,6 +81,18 @@ func Migrate(database *gorm.DB) error {
 		return err
 	}
 	return seedTaxFreeAddresses(database)
+}
+
+// Older installations do not have a task-level payment region. Add it before
+// AutoMigrate so upgrades are repeatable and legacy rows remain readable.
+func prepareRechargeTaskPaymentRegion(database *gorm.DB) error {
+	if database == nil || !database.Migrator().HasTable(&models.RechargeTask{}) {
+		return nil
+	}
+	if err := database.Exec(`ALTER TABLE "recharge_tasks" ADD COLUMN IF NOT EXISTS "payment_region" varchar(4) NOT NULL DEFAULT ''`).Error; err != nil {
+		return fmt.Errorf("prepare recharge task payment region: %w", err)
+	}
+	return nil
 }
 
 // Older installations may already have card_allocations without the
@@ -209,6 +224,8 @@ var providerPlanNames = map[string]string{
 	"plus":            "chatgptplusplan",
 	"pro_5x":          "chatgptprolite",
 	"pro_20x":         "chatgptpro",
+	"go":              "chatgptgoplan",
+	"chatgptgoplan":   "chatgptgoplan",
 	"chatgptplusplan": "chatgptplusplan",
 	"chatgptprolite":  "chatgptprolite",
 	"chatgptpro":      "chatgptpro",
@@ -251,6 +268,8 @@ func PlanTypeForPlan(plan models.Plan) string {
 			return "pro_5x"
 		case "chatgptpro", "pro_20x", "pro20x":
 			return "pro_20x"
+		case "chatgptgoplan", "go", "chatgpt_go":
+			return "go"
 		}
 	}
 	code := strings.TrimSpace(plan.Code)
@@ -312,6 +331,7 @@ func seedPlans(database *gorm.DB) error {
 		{ID: "plan_plus", Code: "plus", Name: "ChatGPT Plus", Description: "适合日常使用：GPT-5.5、高级数据分析、DALL·E 等 Plus 权益，按月订阅。", ProviderPlanName: ProviderPlanNameForCode("plus"), Country: "US", Currency: models.PlatformStoreCurrency, Price: 20, SortOrder: 10, Active: true},
 		{ID: "plan_pro_5x", Code: "pro_5x", Name: "Pro 5x", Description: "在 Pro 基础上提供约 5 倍的消息/推理额度，适合重度个人用户与创作者。", ProviderPlanName: ProviderPlanNameForCode("pro_5x"), Country: "US", Currency: models.PlatformStoreCurrency, Price: 100, SortOrder: 20, Active: true},
 		{ID: "plan_pro_20x", Code: "pro_20x", Name: "Pro 20x", Description: "最高约 20 倍 Pro 用量上限，适合团队主力账号、开发测试与高并发场景。", ProviderPlanName: ProviderPlanNameForCode("pro_20x"), Country: "US", Currency: models.PlatformStoreCurrency, Price: 200, SortOrder: 30, Active: true},
+		{ID: "plan_go", Code: "go", Name: "ChatGPT Go", Description: "适合需要基础高级功能的轻量套餐。", ProviderPlanName: ProviderPlanNameForCode("go"), Country: "IN", Currency: models.PlatformStoreCurrency, Price: 10, SortOrder: 40, Active: true},
 	}
 	for _, plan := range plans {
 		var existing models.Plan

@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/db"
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/models"
+	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/paymentregion"
 	"gorm.io/gorm"
 )
 
@@ -19,13 +20,7 @@ var storeProductProviderPlans = map[string]bool{
 	"chatgptplusplan": true,
 	"chatgptprolite":  true,
 	"chatgptpro":      true,
-}
-
-var storeProductCountries = map[string]bool{
-	"US": true,
-	"PH": true,
-	"SG": true,
-	"MY": true,
+	"chatgptgoplan":   true,
 }
 
 // decoratePlanInventory adds computed storefront availability without
@@ -65,7 +60,7 @@ func storeProductResponse(plan models.Plan) gin.H {
 	publishedTone := map[bool]string{true: "success", false: "neutral"}[plan.Active]
 	return gin.H{
 		"id": plan.ID, "code": plan.Code, "name": plan.Name, "description": plan.Description, "active": plan.Active,
-		"providerPlanName": db.NormalizeProviderPlanName(plan.Code, plan.ProviderPlanName), "country": plan.Country, "currency": models.PlatformStoreCurrency,
+		"providerPlanName": db.NormalizeProviderPlanName(plan.Code, plan.ProviderPlanName), "country": plan.Country, "paymentRegion": plan.Country, "paymentCurrency": paymentregionCurrency(plan.Country), "currency": models.PlatformStoreCurrency,
 		"price": plan.Price, "priceText": fmt.Sprintf("CN¥%.2f", plan.Price), "published": plan.Active, "sortOrder": plan.SortOrder,
 		"published_label": publishedLabel, "published_tone": publishedTone,
 		"published_action_label": map[bool]string{true: "下架", false: "发布"}[plan.Active],
@@ -80,20 +75,24 @@ func storeProductResponse(plan models.Plan) gin.H {
 }
 
 func storeProductOptions() gin.H {
+	countries := make([]gin.H, 0, len(paymentregion.All()))
+	for _, region := range paymentregion.All() {
+		countries = append(countries, gin.H{
+			"value": region.Code, "code": region.Code, "label": region.Label,
+			"countryLabel": region.CountryLabel, "currency": region.Currency,
+		})
+	}
 	return gin.H{
 		"currency": models.PlatformStoreCurrency,
 		"providerPlans": []gin.H{
 			{"value": "chatgptplusplan", "code": "plus", "label": "ChatGPT Plus（plus）"},
 			{"value": "chatgptprolite", "code": "pro_5x", "label": "Pro 5x（pro_5x）"},
 			{"value": "chatgptpro", "code": "pro_20x", "label": "Pro 20x（pro_20x）"},
+			{"value": "chatgptgoplan", "code": "go", "label": "ChatGPT Go（go）"},
 		},
-		"countries": []gin.H{
-			{"value": "US", "code": "US", "label": "美国（US）"},
-			{"value": "PH", "code": "PH", "label": "菲律宾（PH）"},
-			{"value": "SG", "code": "SG", "label": "新加坡（SG）"},
-			{"value": "MY", "code": "MY", "label": "马来西亚（MY）"},
-		},
-		"defaults": gin.H{"providerPlanName": db.ProviderPlanNameForCode("plus"), "country": "US", "currency": models.PlatformStoreCurrency, "price": 20, "saleLimit": 0, "sortOrder": 10, "published": true},
+		"countries":      countries,
+		"paymentRegions": countries,
+		"defaults":       gin.H{"providerPlanName": db.ProviderPlanNameForCode("plus"), "country": "US", "currency": models.PlatformStoreCurrency, "price": 20, "saleLimit": 0, "sortOrder": 10, "published": true},
 	}
 }
 
@@ -156,7 +155,7 @@ func (s *Server) upsertStoreProduct(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "关联原版套餐不正确")
 		return
 	}
-	if !storeProductCountries[input.Country] {
+	if !paymentregion.IsSupported(input.Country) {
 		fail(c, http.StatusBadRequest, "开通地区不正确")
 		return
 	}
@@ -204,6 +203,13 @@ func (s *Server) upsertStoreProduct(c *gin.Context) {
 	}
 	traceID := requestTraceID(c)
 	c.JSON(http.StatusOK, gin.H{"product": storeProductResponse(plan), "message": fmt.Sprintf("商品 %s 已保存", plan.Code), "traceId": traceID, "trace_id": traceID})
+}
+
+func paymentregionCurrency(code string) string {
+	if region, ok := paymentregion.Get(code); ok {
+		return region.Currency
+	}
+	return "USD"
 }
 
 func (s *Server) updateStoreProduct(c *gin.Context) {

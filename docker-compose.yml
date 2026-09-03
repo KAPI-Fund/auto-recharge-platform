@@ -111,9 +111,9 @@ services:
       redis:
         condition: service_healthy
     environment:
-      API_BASE_URL: http://api:8080
+      API_BASE_URL: ${WORKER_API_BASE_URL:-http://api:8080}
       WORKER_API_TOKEN: ${WORKER_API_TOKEN:-dev-worker-token}
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: ${WORKER_REDIS_URL:-redis://redis:6379/0}
       QUEUE_NAME: ${QUEUE_NAME:-recharge:tasks}
       WORKER_ID: ${WORKER_ID:-worker-1}
       UPSTREAM_BASE_URL: ${UPSTREAM_BASE_URL:-}
@@ -152,6 +152,8 @@ services:
       BROWSER_POOL_CONTROL_PORT: 8091
     volumes:
       - ./runtime:/app/runtime
+    ports:
+      - "${WORKER_CONTROL_PORT:-8091}:8091"
     shm_size: "1gb"
 
   web:

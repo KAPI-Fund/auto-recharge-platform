@@ -20,6 +20,24 @@ type ConfigValidator interface {
 	ValidateConfiguration() error
 }
 
+// CardBIN is provider-neutral metadata used by admin configuration screens.
+// It deliberately contains no card number, CVC, or other sensitive data.
+type CardBIN struct {
+	ID           string `json:"id"`
+	Name         string `json:"name,omitempty"`
+	CardType     string `json:"cardType,omitempty"`
+	Status       string `json:"status,omitempty"`
+	MaxCardCount int64  `json:"maxCardCount,omitempty"`
+	IssuedCount  int64  `json:"issuedCount,omitempty"`
+}
+
+// CardBINLister is an optional provider capability. Providers that expose
+// available issuing BINs can implement it without forcing the core provider
+// contract or PaymentService to know provider-specific APIs.
+type CardBINLister interface {
+	ListCardBINs(context.Context) ([]CardBIN, error)
+}
+
 type CardProvider interface {
 	ProviderName() string
 	HealthCheck(ctx context.Context) (ProviderHealth, error)

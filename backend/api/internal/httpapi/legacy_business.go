@@ -16,6 +16,7 @@ import (
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/cardpool"
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/db"
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/models"
+	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/paymentregion"
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/queue"
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/security"
 	"gorm.io/gorm"
@@ -59,25 +60,22 @@ func (s *Server) legacyRuntime(c *gin.Context) {
 }
 
 func regionBilling(region string) (string, string) {
-	switch strings.ToUpper(strings.TrimSpace(region)) {
-	case "PH":
-		return "PHP", "菲律宾"
-	case "SG":
-		return "SGD", "新加坡"
-	case "MY":
-		return "MYR", "马来西亚"
-	default:
-		return "USD", "美国"
+	if value, ok := paymentregion.Get(region); ok {
+		return value.Currency, value.CountryLabel
 	}
+	value := paymentregion.Default()
+	return value.Currency, value.CountryLabel
 }
 
 func legacyRegionOptions() []gin.H {
-	return []gin.H{
-		{"value": "PH", "code": "PH", "label": "菲律宾 (PH) — PHP", "countryLabel": "菲律宾", "currency": "PHP"},
-		{"value": "US", "code": "US", "label": "美国 (US) — USD", "countryLabel": "美国", "currency": "USD"},
-		{"value": "SG", "code": "SG", "label": "新加坡 (SG) — SGD", "countryLabel": "新加坡", "currency": "SGD"},
-		{"value": "MY", "code": "MY", "label": "马来西亚 (MY) — MYR", "countryLabel": "马来西亚", "currency": "MYR"},
+	options := make([]gin.H, 0, len(paymentregion.All()))
+	for _, value := range paymentregion.All() {
+		options = append(options, gin.H{
+			"value": value.Code, "code": value.Code, "label": value.Label,
+			"countryLabel": value.CountryLabel, "currency": value.Currency,
+		})
 	}
+	return options
 }
 
 func (s *Server) legacyPlans(c *gin.Context) {
@@ -145,7 +143,7 @@ func (s *Server) legacySaveConfig(c *gin.Context) {
 		"dogpay_base_url":                     true, "dogpay_channel_id": true, "dogpay_entity_id": true,
 		"dogpay_card_type": true, "dogpay_budget_id": true,
 		"dogpay_webhook_tolerance_seconds": true,
-		"kimoox_base_url":                  true, "kimoox_card_bin_id": true, "kimoox_card_type": true,
+		"kimoox_base_url":                  true, "kimoox_card_bin_ids": true, "kimoox_card_type": true,
 		"kimoox_cardholder_id": true, "kimoox_holder_id": true, "kimoox_card_group_id": true,
 		"kimoox_budget_id": true, "kimoox_webhook_tolerance_seconds": true,
 		"kimoox_apply_poll_attempts": true, "kimoox_apply_poll_interval_seconds": true,
@@ -382,7 +380,7 @@ func normalizeLegacyConfigInput(input map[string]any) map[string]any {
 		"dogpayPrivateKey":                     "dogpay_private_key",
 		"kimooxEnabled":                        "card_provider_kimoox_enabled",
 		"kimooxBaseURL":                        "kimoox_base_url",
-		"kimooxCardBINID":                      "kimoox_card_bin_id",
+		"kimooxCardBINIDs":                     "kimoox_card_bin_ids",
 		"kimooxCardType":                       "kimoox_card_type",
 		"kimooxCardholderID":                   "kimoox_cardholder_id",
 		"kimooxHolderID":                       "kimoox_holder_id",
@@ -499,7 +497,7 @@ func (s *Server) legacySaveRegion(c *gin.Context) {
 	if region == "" {
 		region = strings.ToUpper(stringValue(input, "payment_region"))
 	}
-	if !map[string]bool{"PH": true, "US": true, "SG": true, "MY": true}[region] {
+	if !paymentregion.IsSupported(region) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "不支持的地区代码"})
 		return
 	}
@@ -767,8 +765,8 @@ func (s *Server) legacyCDKs(c *gin.Context) {
 		"selectableCodes": selectableCodes,
 		"filters": gin.H{
 			"status":     []gin.H{{"value": "all", "label": "全部状态"}, {"value": "unused", "label": "未使用"}, {"value": "used", "label": "已使用"}, {"value": "unshipped", "label": "未出库"}, {"value": "shipped", "label": "已出库"}},
-			"plan":       []gin.H{{"value": "all", "label": "全部套餐"}, {"value": "plus", "label": "Plus"}, {"value": "pro_5x", "label": "Pro 5x"}, {"value": "pro_20x", "label": "Pro 20x"}},
-			"generation": []gin.H{{"value": "plus", "label": "Plus"}, {"value": "pro_5x", "label": "Pro 5x"}, {"value": "pro_20x", "label": "Pro 20x"}},
+			"plan":       []gin.H{{"value": "all", "label": "全部套餐"}, {"value": "plus", "label": "Plus"}, {"value": "pro_5x", "label": "Pro 5x"}, {"value": "pro_20x", "label": "Pro 20x"}, {"value": "go", "label": "ChatGPT Go"}},
+			"generation": []gin.H{{"value": "plus", "label": "Plus"}, {"value": "pro_5x", "label": "Pro 5x"}, {"value": "pro_20x", "label": "Pro 20x"}, {"value": "go", "label": "ChatGPT Go"}},
 		},
 	})
 }
@@ -832,6 +830,8 @@ func legacyCDKStatusTone(status string) string {
 
 func legacyPlanLabel(plan string) string {
 	switch plan {
+	case "go":
+		return "ChatGPT Go"
 	case "pro_5x":
 		return "Pro 5x"
 	case "pro_20x":
@@ -1059,6 +1059,8 @@ func normalizePlanType(value string) string {
 		return "pro_5x"
 	case "pro_20x", "pro20x":
 		return "pro_20x"
+	case "go", "chatgpt_go", "chatgptgoplan":
+		return "go"
 	default:
 		return "plus"
 	}
@@ -1535,6 +1537,7 @@ func legacyBillingFilterOptions() gin.H {
 			{"value": "plus", "label": "Plus"},
 			{"value": "pro_5x", "label": "Pro 5x"},
 			{"value": "pro_20x", "label": "Pro 20x"},
+			{"value": "go", "label": "ChatGPT Go"},
 		},
 		"status": []gin.H{
 			{"value": "", "label": "全部"},

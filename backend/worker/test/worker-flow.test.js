@@ -20,6 +20,25 @@ test("browser worker skips protocol queue items before claiming", async () => {
   );
 });
 
+test("expired queue messages are consumed instead of retried forever", async () => {
+  let claimCalls = 0;
+  const worker = new RechargeWorker({
+    api: {
+      setTraceId() {},
+      async claimTask() {
+        claimCalls += 1;
+        const error = new Error("task worker lease is no longer valid");
+        error.code = "task_lease_lost";
+        throw error;
+      },
+    },
+    config: { workerId: "test-worker" },
+  });
+
+  await worker.process({ taskId: "task_expired", mode: "dry_run", traceId: "trace_expired" });
+  assert.equal(claimCalls, 1, "expired task was claimed more than once");
+});
+
 test("legacy output maps protocol debug pause before charge", () => {
   const result = analyzeLegacyOutput("调试结束：已到达付款前最后一步，未向 Stripe 提交扣款\npayment_paused_before_submit", 0);
   assert.equal(result.status, "manual");

@@ -30,6 +30,10 @@ cdk_code="$(jq -r '.cdks[0].code' <<<"$cdk_response")"
 session="$(node -e 'const b=(value)=>Buffer.from(JSON.stringify(value)).toString("base64url"); console.log(`${b({typ:"JWT",alg:"RS256"})}.${b({iss:"https://auth.openai.com",aud:["https://api.openai.com/v1"],"https://api.openai.com/auth":{chatgpt_account_id:"acct-local-e2e",chatgpt_user_id:"user-local-e2e"},scp:["model.request"],exp:Math.floor(Date.now()/1000)+3600})}.local-e2e`)')"
 task_response="$(curl -sS -X POST "$API_URL/api/v1/recharge/tasks" "${json_headers[@]}" \
   --data "$(jq -cn --arg code "$cdk_code" --arg session "$session" '{code:$code,session:$session,mode:"dry_run"}')")"
+if ! jq -e '.task.id | strings | length > 0' <<<"$task_response" >/dev/null; then
+  printf 'Worker flow E2E could not create a task: %s\n' "$task_response" >&2
+  exit 1
+fi
 task_id="$(jq -r '.task.id' <<<"$task_response")"
 [[ -n "$task_id" && "$task_id" != "null" ]]
 
@@ -39,6 +43,10 @@ for _ in $(seq 1 60); do
   task_status="$(jq -r '.task.status' <<<"$final_task")"
   case "$task_status" in
     succeeded|failed|manual) break ;;
+    null)
+      printf 'Worker flow E2E lost task %s: %s\n' "$task_id" "$final_task" >&2
+      exit 1
+      ;;
   esac
   sleep 0.5
 done
