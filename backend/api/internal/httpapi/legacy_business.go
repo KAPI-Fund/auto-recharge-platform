@@ -638,8 +638,9 @@ func (s *Server) legacyVerifyCDKValue(c *gin.Context, code string) {
 	}
 	var task models.RechargeTask
 	if err := s.DB.Where("cdk_id = ? AND status IN ?", cdk.ID, []string{models.TaskQueued, models.TaskRunning}).Order("created_at DESC").First(&task).Error; err == nil {
+		planType := legacyCDKPlanType(cdk)
 		c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{
-			"type": cdk.Type, "plan_type": cdk.PlanType, "plan_label": cdk.Plan.Name,
+			"type": cdk.Type, "plan_type": planType, "plan_label": legacyPlanLabel(planType),
 			"status": "processing", "taskStatus": task.Status, "taskId": task.ID, "jobKey": task.JobKey,
 			"progress": clampProgress(task.Progress), "message": publicTaskMessage(task.Status),
 			"task": publicTaskResponse(task),
@@ -651,7 +652,8 @@ func (s *Server) legacyVerifyCDKValue(c *gin.Context, code string) {
 			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "该卡密连续无资格尝试过多，请稍后再试"})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"type": cdk.Type, "plan_type": cdk.PlanType, "plan_label": cdk.Plan.Name}})
+		planType := legacyCDKPlanType(cdk)
+		c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"type": cdk.Type, "plan_type": planType, "plan_label": legacyPlanLabel(planType)}})
 		return
 	}
 	message := "CDK 无效或不可用"
@@ -719,6 +721,7 @@ func (s *Server) legacyCDKs(c *gin.Context) {
 	}
 	items := make([]gin.H, 0, len(rows))
 	for _, row := range rows {
+		planType := legacyCDKPlanType(row)
 		status := "unused"
 		if runningCDKs[row.Code] {
 			status = "processing"
@@ -733,7 +736,7 @@ func (s *Server) legacyCDKs(c *gin.Context) {
 			sessionPreview = task.SessionPreview
 		}
 		items = append(items, gin.H{
-			"code": row.Code, "traceId": task.TraceID, "trace_id": task.TraceID, "status": status, "status_label": legacyCDKStatusLabel(status), "status_tone": legacyCDKStatusTone(status), "type": firstNonEmpty(row.Type, models.CDKTypeSelf), "plan_type": firstNonEmpty(row.PlanType, "plus"), "plan_label": legacyPlanLabel(firstNonEmpty(row.PlanType, "plus")), "plan_class": "cdk-plan-" + firstNonEmpty(row.PlanType, "plus"),
+			"code": row.Code, "traceId": task.TraceID, "trace_id": task.TraceID, "status": status, "status_label": legacyCDKStatusLabel(status), "status_tone": legacyCDKStatusTone(status), "type": firstNonEmpty(row.Type, models.CDKTypeSelf), "plan_type": planType, "plan_label": legacyPlanLabel(planType), "plan_class": "cdk-plan-" + planType,
 			"shipped": row.ShippedAt != nil, "shipped_at": legacyOptionalTimeString(row.ShippedAt), "shipped_label": map[bool]string{true: "已出库", false: "未出库"}[row.ShippedAt != nil], "shipped_class": map[bool]string{true: "active", false: ""}[row.ShippedAt != nil],
 			"used_at": legacyOptionalTimeString(row.UsedAt), "used_at_text": legacyOptionalTimeString(row.UsedAt), "created_at": legacyTimeString(row.CreatedAt),
 			"session_preview": nullableLegacyString(sessionPreview), "session_job_key": nullableLegacyString(task.JobKey),
@@ -829,6 +832,7 @@ func legacyCDKStatusTone(status string) string {
 }
 
 func legacyPlanLabel(plan string) string {
+	plan = normalizePlanType(plan)
 	switch plan {
 	case "go":
 		return "ChatGPT Go"
@@ -839,6 +843,10 @@ func legacyPlanLabel(plan string) string {
 	default:
 		return "Plus"
 	}
+}
+
+func legacyCDKPlanType(row models.CDK) string {
+	return normalizePlanType(firstNonEmpty(row.PlanType, row.Plan.Code, "plus"))
 }
 
 func paginationParams(c *gin.Context, defaultSize, maxSize int) (page, pageSize, offset int) {
@@ -1055,9 +1063,11 @@ func (s *Server) legacyDeleteCDK(c *gin.Context) {
 
 func normalizePlanType(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "pro_5x", "pro5x":
+	case "plus", "chatgptplusplan":
+		return "plus"
+	case "pro_5x", "pro5x", "chatgptprolite":
 		return "pro_5x"
-	case "pro_20x", "pro20x":
+	case "pro_20x", "pro20x", "chatgptpro":
 		return "pro_20x"
 	case "go", "chatgpt_go", "chatgptgoplan":
 		return "go"
@@ -1479,7 +1489,8 @@ func (s *Server) billingQuery(c *gin.Context) *gorm.DB {
 
 func (s *Server) billingResponse(row models.BillingRecord) (gin.H, error) {
 	statusLabel, statusTone := billingStatusView(row.Status)
-	return gin.H{"id": row.ID, "payment_time": row.PaymentTime, "payment_time_text": legacyTimeString(row.PaymentTime), "card_number": maskedCardNumber(row.CardLast4), "card_last4": row.CardLast4, "amount": row.Amount, "amount_text": fmt.Sprintf("%.2f", row.Amount), "currency": row.Currency, "plan_type": row.PlanType, "plan_label": legacyPlanLabel(row.PlanType), "stripe_session_id": row.StripeSessionID, "cdk_code": row.CDKCode, "email": row.Email, "status": row.Status, "status_label": statusLabel, "status_tone": statusTone, "error_code": row.ErrorCode, "error_message": row.ErrorMessage, "upstream_order_id": row.UpstreamOrderID, "created_at": row.CreatedAt}, nil
+	planType := normalizePlanType(row.PlanType)
+	return gin.H{"id": row.ID, "payment_time": row.PaymentTime, "payment_time_text": legacyTimeString(row.PaymentTime), "card_number": maskedCardNumber(row.CardLast4), "card_last4": row.CardLast4, "amount": row.Amount, "amount_text": fmt.Sprintf("%.2f", row.Amount), "currency": row.Currency, "plan_type": planType, "plan_label": legacyPlanLabel(planType), "stripe_session_id": row.StripeSessionID, "cdk_code": row.CDKCode, "email": row.Email, "status": row.Status, "status_label": statusLabel, "status_tone": statusTone, "error_code": row.ErrorCode, "error_message": row.ErrorMessage, "upstream_order_id": row.UpstreamOrderID, "created_at": row.CreatedAt}, nil
 }
 
 func billingStatusView(status string) (string, string) {

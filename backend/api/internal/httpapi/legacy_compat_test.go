@@ -187,6 +187,19 @@ func TestLegacyCDKListDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestLegacyCDKPlanAliasesAndLabels(t *testing.T) {
+	if got := normalizePlanType("chatgptgoplan"); got != "go" {
+		t.Fatalf("normalized legacy Go plan = %q, want go", got)
+	}
+	if got := legacyPlanLabel("chatgptgoplan"); got != "ChatGPT Go" {
+		t.Fatalf("legacy Go label = %q, want ChatGPT Go", got)
+	}
+	row := models.CDK{PlanType: "", Plan: models.Plan{Code: "chatgptgoplan"}}
+	if got := legacyCDKPlanType(row); got != "go" {
+		t.Fatalf("CDK plan fallback = %q, want go", got)
+	}
+}
+
 func TestSecondarySessionMatchesLegacyUnauthenticatedResponse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()

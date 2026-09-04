@@ -110,12 +110,35 @@ const PLAN_NAME_MAP = Object.freeze({
   go: 'chatgptgoplan'
 });
 
+function normalizePlanType(planType) {
+  switch (String(planType || '').trim().toLowerCase()) {
+    case 'go':
+    case 'chatgpt_go':
+    case 'chatgptgoplan':
+      return 'go';
+    case 'pro_5x':
+    case 'pro5x':
+    case 'chatgptprolite':
+      return 'pro_5x';
+    case 'pro_20x':
+    case 'pro20x':
+    case 'chatgptpro':
+      return 'pro_20x';
+    case 'plus':
+    case 'chatgptplusplan':
+      return 'plus';
+    default:
+      return 'plus';
+  }
+}
+
 function resolvePlanName(planType) {
-  return PLAN_NAME_MAP[String(planType || '').trim().toLowerCase()] || PLAN_NAME_MAP.plus;
+  return PLAN_NAME_MAP[normalizePlanType(planType)] || PLAN_NAME_MAP.plus;
 }
 
 const adapter = {
   PLAN_NAME_MAP,
+  normalizePlanType,
   resolvePlanName,
   runQuery() {
     throw new Error('原版 Worker 的 SQL 存储接口已由 Go API 接管');

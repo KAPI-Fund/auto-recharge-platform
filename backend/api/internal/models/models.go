@@ -4,6 +4,9 @@ import "time"
 
 const (
 	PlatformStoreCurrency = "CNY"
+	// DefaultStoreSaleLimit is used when upgrading legacy published products
+	// that previously used sale_limit=0 to mean unlimited inventory.
+	DefaultStoreSaleLimit = 100
 
 	CDKAvailable   = "available"
 	CDKProcessing  = "processing"
@@ -36,9 +39,10 @@ type Plan struct {
 	Active           bool    `gorm:"not null;default:true" json:"active"`
 	SortOrder        int     `gorm:"not null;default:0" json:"sortOrder"`
 	// SaleLimit is the total number of storefront units that may be sold.
-	// Zero means unlimited. SoldCount is increased only when a storefront
-	// order is successfully fulfilled, never when a pending checkout is made.
-	SaleLimit int `gorm:"not null;default:0" json:"saleLimit"`
+	// Published products must have a positive limit. SoldCount is increased
+	// only when a storefront order is successfully fulfilled, never when a
+	// pending checkout is made.
+	SaleLimit int `gorm:"not null;default:100" json:"saleLimit"`
 	SoldCount int `gorm:"not null;default:0" json:"soldCount"`
 	// These fields are computed by the API projection and are not persisted.
 	RemainingQuantity *int      `gorm:"-" json:"remainingQuantity"`

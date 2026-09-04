@@ -96,11 +96,14 @@ node ./scripts/admin-e2e.mjs
 # 前台购买、发 CDK、验证 CDK、查询状态的真实浏览器 E2E
 node ./scripts/public-e2e.mjs
 
+# 商品库存闭环：创建/发布 saleLimit=1 商品、购买发 CDK、库存归零、前台禁购、后端 409
+node ./scripts/store-inventory-e2e.mjs
+
 # 公开参考页路由、内部跳转、hash/标签筛选、移动菜单和本地视频资源 E2E
 node ./scripts/public-reference-pages-e2e.mjs
 ```
 
-E2E 默认只使用本地测试管理员账号，创建一个唯一的下架商品后再发布、下架；不会调用 Stripe 或提交充值任务。每个 `/legacy-api/*`、`/platform-api/*` 响应都必须带 `X-Trace-ID`，任何 Go 端 5xx、页面错误或 `[object Object]` 都会使测试失败。
+E2E 默认只使用本地测试管理员账号，创建唯一的临时商品并在测试结束时下架；不会调用 Stripe 或提交充值任务。库存闭环脚本还会验证前台显示“已售罄，补货中”、购买按钮禁用，以及第二次购买返回 HTTP 409。每个 `/legacy-api/*`、`/platform-api/*` 响应都必须带 `X-Trace-ID`，任何 Go 端 5xx、页面错误或 `[object Object]` 都会使测试失败。
 
 并发准入使用 Redis 做带 TTL 的前置槽位，PostgreSQL 事务做最终裁决。任务创建、CDK 状态变更、Worker 租约、心跳、终态回收和 Redis 槽位释放必须一起验证。真实 PostgreSQL/Redis HTTP 闭环测试默认跳过，避免普通单元测试碰业务库；使用独立测试库运行：
 

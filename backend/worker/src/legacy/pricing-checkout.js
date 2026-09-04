@@ -35,6 +35,7 @@ const REGION_WRONG_CURRENCY = {
 };
 
 const REGION_CURRENT_COUNTRY_HINTS = {
+    IN: [/India|印度/i],
     PH: [/菲律宾|Philippines|Pilipinas/i],
     US: [/United States|美国(?!地区)/i],
     SG: [/Singapore|新加坡/i],
@@ -44,6 +45,7 @@ const REGION_CURRENT_COUNTRY_HINTS = {
 const SKIP_REGION_BUTTON_TEXT = /^(Upgrade|Personal|Business|Free|Plus|Pro|Subscribe|Close|Your current plan|升级|订阅|关闭)$/i;
 
 const PLAN_UPGRADE_PATTERNS = {
+    go: [/升级至\s*Go/i, /Upgrade to Go/i, /Get Go/i, /Subscribe to Go/i, /^Go$/i],
     plus: [/升级至\s*Plus/i, /Upgrade to Plus/i, /Get Plus/i, /Subscribe to Plus/i, /^Upgrade$/i],
     pro_5x: [/升级至\s*Pro/i, /Upgrade to Pro/i, /Get Pro/i, /^Upgrade$/i],
     pro_20x: [/升级至\s*Pro/i, /Upgrade to Pro/i, /Get Pro/i, /^Upgrade$/i]
@@ -653,7 +655,7 @@ async function clickPlanUpgrade(page, planType) {
         } catch (_) { /* try next */ }
     }
 
-    const cardTitle = plan === 'plus' ? /ChatGPT Plus/i : /ChatGPT Pro/i;
+    const cardTitle = plan === 'plus' ? /ChatGPT Plus/i : plan === 'go' ? /ChatGPT Go|^Go$/i : /ChatGPT Pro/i;
     try {
         const card = page.locator('div').filter({ hasText: cardTitle }).filter({ has: page.getByRole('button') }).first();
         const btn = card.getByRole('button').filter({ hasText: /升级|Upgrade|Subscribe|Get/i }).first();
@@ -686,6 +688,12 @@ async function clickPlanUpgrade(page, planType) {
             'button:has-text("Upgrade to Plus")',
             '[role="dialog"] >> text=ChatGPT Plus >> .. >> .. >> button:has-text("Upgrade")',
             'text=ChatGPT Plus >> xpath=ancestor::div[.//button[contains(., "Upgrade") or contains(., "升级")]][1] >> button'
+        ]
+        : plan === 'go'
+        ? [
+            'button:has-text("升级至 Go")',
+            'button:has-text("Upgrade to Go")',
+            'text=ChatGPT Go >> xpath=ancestor::div[.//button[contains(., "Upgrade") or contains(., "升级")]][1] >> button'
         ]
         : [
             'button:has-text("升级至 Pro")',

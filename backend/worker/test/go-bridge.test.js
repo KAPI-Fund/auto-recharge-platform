@@ -12,6 +12,13 @@ const require = createRequire(import.meta.url);
 const store = require("../src/legacy-go/store-adapter.cjs");
 const taxFreeAddress = require("../src/legacy-go/tax-free-address.cjs");
 
+test("Go plan aliases resolve to the ChatGPT Go provider plan", () => {
+  for (const alias of ["go", "chatgptgoplan", "chatgpt_go"]) {
+    assert.equal(store.normalizePlanType(alias), "go");
+    assert.equal(store.resolvePlanName(alias), "chatgptgoplan");
+  }
+});
+
 function listen(server) {
   return new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 }

@@ -594,6 +594,7 @@ async function run() {
     await formPanel.locator("label").filter({ hasText: "商品编码" }).locator("input").fill(productCode);
     await formPanel.locator("label").filter({ hasText: "商品名称" }).locator("input").fill("E2E 测试商品");
     await formPanel.locator("label").filter({ hasText: "价格" }).locator("input").fill("1");
+    await formPanel.locator("label").filter({ hasText: "可售数量" }).locator("input").fill("10");
     await formPanel.locator("label").filter({ hasText: "排序" }).locator("input").fill("999");
     const published = formPanel.locator('input[type="checkbox"]');
     await published.waitFor({ state: "visible" });

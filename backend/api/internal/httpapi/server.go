@@ -392,7 +392,7 @@ func (s *Server) taskSecret(c *gin.Context) {
 			return
 		}
 	}
-	planType := firstNonEmpty(cdk.PlanType, plan.Code, "plus")
+	planType := normalizePlanType(firstNonEmpty(cdk.PlanType, plan.Code, "plus"))
 	planName := db.NormalizeProviderPlanName(planType, firstNonEmpty(task.PlanNameOverride, cdk.Plan.ProviderPlanName, plan.ProviderPlanName, plan.Code, planType))
 	cdkCode := firstNonEmpty(cdk.Code, task.CDKCode)
 	region := paymentregion.Normalize(task.PaymentRegion)

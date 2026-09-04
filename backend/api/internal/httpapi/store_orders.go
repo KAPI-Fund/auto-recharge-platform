@@ -111,6 +111,10 @@ func (s *Server) createStoreOrder(c *gin.Context) {
 		publicFail(c, http.StatusInternalServerError, "读取套餐失败")
 		return
 	}
+	if plan.SaleLimit <= 0 {
+		fail(c, http.StatusConflict, errStoreProductInventoryNotConfigured.Error())
+		return
+	}
 	if !planHasSaleCapacity(plan) {
 		fail(c, http.StatusConflict, errStoreProductSoldOut.Error())
 		return
@@ -965,15 +969,14 @@ func (s *Server) fulfillStoreOrderWithPaymentDetailsTx(tx *gorm.DB, orderID, ses
 
 // consumeStoreProductInventory performs the only persisted sale-count update.
 // The conditional predicate makes concurrent fulfillments serialize at the
-// database level and prevents sold_count from exceeding sale_limit. Unlimited
-// products keep their counter at zero while still passing the same statement.
+// database level and prevents sold_count from exceeding sale_limit.
 func consumeStoreProductInventory(tx *gorm.DB, planID string) error {
 	if tx == nil || strings.TrimSpace(planID) == "" {
 		return fmt.Errorf("售卡商品不存在")
 	}
 	result := tx.Model(&models.Plan{}).
-		Where("id = ? AND (sale_limit <= 0 OR sold_count < sale_limit)", planID).
-		UpdateColumn("sold_count", gorm.Expr("CASE WHEN sale_limit > 0 THEN sold_count + 1 ELSE sold_count END"))
+		Where("id = ? AND sale_limit > 0 AND sold_count < sale_limit", planID).
+		UpdateColumn("sold_count", gorm.Expr("sold_count + 1"))
 	if result.Error != nil {
 		return result.Error
 	}

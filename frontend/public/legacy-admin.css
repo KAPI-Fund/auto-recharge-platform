@@ -1348,6 +1348,9 @@
 
         .cdk-plan-badge {
             border: 0;
+            display: inline-flex;
+            align-items: center;
+            white-space: nowrap;
         }
 
         .cdk-plan-plus {
@@ -1363,6 +1366,11 @@
         .cdk-plan-pro_20x {
             background: rgba(236, 72, 153, 0.12);
             color: #ec4899;
+        }
+
+        .cdk-plan-go {
+            background: rgba(14, 165, 233, 0.12);
+            color: #0284c7;
         }
 
         .cdk-page .filter-trigger svg {

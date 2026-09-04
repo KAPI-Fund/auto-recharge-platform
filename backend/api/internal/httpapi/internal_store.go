@@ -820,10 +820,7 @@ func (s *Server) internalCreateBilling(input map[string]any) (gin.H, error) {
 	if cardLast4 == "" && len(cardNumber) >= 4 {
 		cardLast4 = cardNumber[len(cardNumber)-4:]
 	}
-	planType := stringValue(data, "plan_type")
-	if planType == "" {
-		planType = "plus"
-	}
+	planType := normalizePlanType(stringValue(data, "plan_type"))
 	var plan models.Plan
 	if err := s.DB.Where("code = ? AND active = ?", planType, true).First(&plan).Error; err != nil {
 		return nil, fmt.Errorf("套餐不存在: %w", err)

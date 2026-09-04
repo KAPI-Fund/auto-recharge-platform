@@ -71,6 +71,9 @@ func Migrate(database *gorm.DB) error {
 	); err != nil {
 		return err
 	}
+	if err := ensurePublishedPlanInventoryConstraint(database); err != nil {
+		return err
+	}
 	if err := normalizePlanCurrencies(database); err != nil {
 		return err
 	}
@@ -81,6 +84,30 @@ func Migrate(database *gorm.DB) error {
 		return err
 	}
 	return seedTaxFreeAddresses(database)
+}
+
+// Keep the finite-inventory rule enforceable even when a plan is written by a
+// maintenance script or another backend path instead of the storefront API.
+func ensurePublishedPlanInventoryConstraint(database *gorm.DB) error {
+	if database == nil || !database.Migrator().HasTable(&models.Plan{}) {
+		return nil
+	}
+	const statement = `DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'ck_plans_published_sale_limit_positive'
+    ) THEN
+        ALTER TABLE "plans"
+            ADD CONSTRAINT "ck_plans_published_sale_limit_positive"
+            CHECK (active = FALSE OR sale_limit > 0);
+    END IF;
+END $$;`
+	if err := database.Exec(statement).Error; err != nil {
+		return fmt.Errorf("ensure published plan sale limit constraint: %w", err)
+	}
+	return nil
 }
 
 // Older installations do not have a task-level payment region. Add it before
@@ -112,23 +139,33 @@ func prepareCardAllocationReleaseClaims(database *gorm.DB) error {
 }
 
 // Older databases predate storefront inventory. Add the columns explicitly
-// before AutoMigrate so existing plans get safe zero values and the migration
-// is repeatable on both fresh and upgraded installations.
+// before AutoMigrate so the migration is repeatable on both fresh and upgraded
+// installations. The storefront no longer supports unlimited products: old
+// published rows with sale_limit=0 are backfilled to a finite default.
 func preparePlanInventory(database *gorm.DB) error {
 	if database == nil || !database.Migrator().HasTable(&models.Plan{}) {
 		return nil
 	}
-	if err := database.Exec(`ALTER TABLE "plans" ADD COLUMN IF NOT EXISTS "sale_limit" integer NOT NULL DEFAULT 0`).Error; err != nil {
+	if err := database.Exec(fmt.Sprintf(`ALTER TABLE "plans" ADD COLUMN IF NOT EXISTS "sale_limit" integer NOT NULL DEFAULT %d`, models.DefaultStoreSaleLimit)).Error; err != nil {
 		return fmt.Errorf("prepare plan sale limit: %w", err)
+	}
+	if err := database.Exec(fmt.Sprintf(`ALTER TABLE "plans" ALTER COLUMN "sale_limit" SET DEFAULT %d`, models.DefaultStoreSaleLimit)).Error; err != nil {
+		return fmt.Errorf("set plan sale limit default: %w", err)
 	}
 	if err := database.Exec(`ALTER TABLE "plans" ADD COLUMN IF NOT EXISTS "sold_count" integer NOT NULL DEFAULT 0`).Error; err != nil {
 		return fmt.Errorf("prepare plan sold count: %w", err)
 	}
-	if err := database.Exec(`UPDATE "plans" SET "sale_limit" = 0 WHERE "sale_limit" IS NULL`).Error; err != nil {
+	if err := database.Exec(fmt.Sprintf(`UPDATE "plans" SET "sale_limit" = %d WHERE "sale_limit" IS NULL`, models.DefaultStoreSaleLimit)).Error; err != nil {
 		return fmt.Errorf("backfill plan sale limit: %w", err)
 	}
 	if err := database.Exec(`UPDATE "plans" SET "sold_count" = 0 WHERE "sold_count" IS NULL`).Error; err != nil {
 		return fmt.Errorf("backfill plan sold count: %w", err)
+	}
+	if err := database.Exec(fmt.Sprintf(`UPDATE "plans" SET "sale_limit" = %d WHERE "active" = TRUE AND "sale_limit" <= 0`, models.DefaultStoreSaleLimit)).Error; err != nil {
+		return fmt.Errorf("backfill published plan sale limit: %w", err)
+	}
+	if err := database.Exec(`ALTER TABLE "plans" ALTER COLUMN "sale_limit" SET NOT NULL`).Error; err != nil {
+		return fmt.Errorf("set plan sale limit not null: %w", err)
 	}
 	return nil
 }
@@ -328,10 +365,10 @@ func prepareRechargeTaskCDKRelation(database *gorm.DB) error {
 
 func seedPlans(database *gorm.DB) error {
 	plans := []models.Plan{
-		{ID: "plan_plus", Code: "plus", Name: "ChatGPT Plus", Description: "适合日常使用：GPT-5.5、高级数据分析、DALL·E 等 Plus 权益，按月订阅。", ProviderPlanName: ProviderPlanNameForCode("plus"), Country: "US", Currency: models.PlatformStoreCurrency, Price: 20, SortOrder: 10, Active: true},
-		{ID: "plan_pro_5x", Code: "pro_5x", Name: "Pro 5x", Description: "在 Pro 基础上提供约 5 倍的消息/推理额度，适合重度个人用户与创作者。", ProviderPlanName: ProviderPlanNameForCode("pro_5x"), Country: "US", Currency: models.PlatformStoreCurrency, Price: 100, SortOrder: 20, Active: true},
-		{ID: "plan_pro_20x", Code: "pro_20x", Name: "Pro 20x", Description: "最高约 20 倍 Pro 用量上限，适合团队主力账号、开发测试与高并发场景。", ProviderPlanName: ProviderPlanNameForCode("pro_20x"), Country: "US", Currency: models.PlatformStoreCurrency, Price: 200, SortOrder: 30, Active: true},
-		{ID: "plan_go", Code: "go", Name: "ChatGPT Go", Description: "适合需要基础高级功能的轻量套餐。", ProviderPlanName: ProviderPlanNameForCode("go"), Country: "IN", Currency: models.PlatformStoreCurrency, Price: 10, SortOrder: 40, Active: true},
+		{ID: "plan_plus", Code: "plus", Name: "ChatGPT Plus", Description: "适合日常使用：GPT-5.5、高级数据分析、DALL·E 等 Plus 权益，按月订阅。", ProviderPlanName: ProviderPlanNameForCode("plus"), Country: "US", Currency: models.PlatformStoreCurrency, Price: 20, SortOrder: 10, SaleLimit: models.DefaultStoreSaleLimit, Active: true},
+		{ID: "plan_pro_5x", Code: "pro_5x", Name: "Pro 5x", Description: "在 Pro 基础上提供约 5 倍的消息/推理额度，适合重度个人用户与创作者。", ProviderPlanName: ProviderPlanNameForCode("pro_5x"), Country: "US", Currency: models.PlatformStoreCurrency, Price: 100, SortOrder: 20, SaleLimit: models.DefaultStoreSaleLimit, Active: true},
+		{ID: "plan_pro_20x", Code: "pro_20x", Name: "Pro 20x", Description: "最高约 20 倍 Pro 用量上限，适合团队主力账号、开发测试与高并发场景。", ProviderPlanName: ProviderPlanNameForCode("pro_20x"), Country: "US", Currency: models.PlatformStoreCurrency, Price: 200, SortOrder: 30, SaleLimit: models.DefaultStoreSaleLimit, Active: true},
+		{ID: "plan_go", Code: "go", Name: "ChatGPT Go", Description: "适合需要基础高级功能的轻量套餐。", ProviderPlanName: ProviderPlanNameForCode("go"), Country: "IN", Currency: models.PlatformStoreCurrency, Price: 10, SortOrder: 40, SaleLimit: models.DefaultStoreSaleLimit, Active: true},
 	}
 	for _, plan := range plans {
 		var existing models.Plan

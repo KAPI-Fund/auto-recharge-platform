@@ -34,11 +34,11 @@ func TestStoreProductResponseAlwaysUsesPlatformCurrency(t *testing.T) {
 	}
 }
 
-func TestPlanInventoryProjectionUsesZeroAsUnlimited(t *testing.T) {
+func TestPlanInventoryProjectionNeverTreatsZeroAsUnlimited(t *testing.T) {
 	plan := models.Plan{Active: true, SaleLimit: 0, SoldCount: 99}
 	decoratePlanInventory(&plan)
-	if plan.RemainingQuantity != nil || plan.SoldOut || !plan.PurchaseEnabled || plan.AvailabilityLabel != "在售" {
-		t.Fatalf("unlimited plan projection = %#v", plan)
+	if plan.RemainingQuantity != nil || plan.SoldOut || plan.PurchaseEnabled || plan.AvailabilityLabel != "库存未配置" {
+		t.Fatalf("invalid zero-inventory projection = %#v", plan)
 	}
 
 	plan = models.Plan{Active: true, SaleLimit: 3, SoldCount: 4}
@@ -51,6 +51,18 @@ func TestPlanInventoryProjectionUsesZeroAsUnlimited(t *testing.T) {
 	decoratePlanInventory(&plan)
 	if plan.SoldOut || plan.PurchaseEnabled || plan.AvailabilityLabel != "已下架" {
 		t.Fatalf("unpublished plan projection = %#v", plan)
+	}
+}
+
+func TestValidateStoreProductInventoryRequiresPositiveLimitWhenPublished(t *testing.T) {
+	if err := validateStoreProductInventory(true, 0); !errors.Is(err, errStoreProductInventoryNotConfigured) {
+		t.Fatalf("published zero inventory error = %v", err)
+	}
+	if err := validateStoreProductInventory(true, -1); err == nil {
+		t.Fatal("published negative inventory unexpectedly accepted")
+	}
+	if err := validateStoreProductInventory(false, 0); err != nil {
+		t.Fatalf("unpublished zero inventory rejected: %v", err)
 	}
 }
 
@@ -74,7 +86,7 @@ func TestBuildStoreOrderCDKUsesCanonicalPlanTypeForCustomProduct(t *testing.T) {
 func TestConsumeStoreProductInventoryUsesConditionalAtomicUpdate(t *testing.T) {
 	db, mock := newAssetRecoveryMock(t)
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE "plans" SET "sold_count"=CASE WHEN sale_limit > 0 THEN sold_count + 1 ELSE sold_count END WHERE id = $1 AND (sale_limit <= 0 OR sold_count < sale_limit)`)).
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE "plans" SET "sold_count"=sold_count + 1 WHERE id = $1 AND sale_limit > 0 AND sold_count < sale_limit`)).
 		WithArgs("plan_limited").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
@@ -93,7 +105,7 @@ func TestConsumeStoreProductInventoryUsesConditionalAtomicUpdate(t *testing.T) {
 func TestConsumeStoreProductInventoryRejectsSoldOutAtomicUpdate(t *testing.T) {
 	db, mock := newAssetRecoveryMock(t)
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE "plans" SET "sold_count"=CASE WHEN sale_limit > 0 THEN sold_count + 1 ELSE sold_count END WHERE id = $1 AND (sale_limit <= 0 OR sold_count < sale_limit)`)).
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE "plans" SET "sold_count"=sold_count + 1 WHERE id = $1 AND sale_limit > 0 AND sold_count < sale_limit`)).
 		WithArgs("plan_sold_out").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectRollback()
