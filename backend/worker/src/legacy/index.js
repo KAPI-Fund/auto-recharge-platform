@@ -6,6 +6,7 @@ const { getRegionConfig, getRegionBrowserProfile } = require('./region-config');
 const { installChatGptSession, bootstrapChatGptSession } = require('./session-auth');
 const { connectTaskBrowser, applyCdpEnv, closeTaskBrowser } = require('./browser-runtime');
 const { preparePlaywrightProxy } = require('./playwright-proxy');
+const { normalizeCheckoutMode, shouldFallbackToUi, formatCheckoutApiFailure } = require('./checkout-mode');
 const fs = require('fs');
 const path = require('path');
 
@@ -213,6 +214,9 @@ async function run() {
     const paymentRegion = String(CONFIG.paymentRegionOverride || '').trim().toUpperCase()
         || await store.getPaymentRegion();
     const regionCfg = getRegionConfig(paymentRegion);
+    if (!regionCfg) {
+        throw new Error(`不支持的支付地区 ${paymentRegion || '(empty)'}，无法启动充值流程`);
+    }
     const browserProfile = getRegionBrowserProfile(paymentRegion);
 
     const contextOptions = {
@@ -507,7 +511,7 @@ async function run() {
 
         // Resolve region and currency (与浏览器 profile 一致)
         const billingCountry = paymentRegion;
-        const billingCurrency = regionCfg ? regionCfg.currency : 'USD';
+        const billingCurrency = regionCfg.currency;
 
         console.log(`[1] 套餐类型: ${planType}, 地区: ${paymentRegion}, 币种: ${billingCurrency}`);
 
@@ -522,7 +526,7 @@ async function run() {
         }
 
         // --- Phase 2: API 创建 Checkout（注入账单地区），失败时回退 UI 定价页 ---
-        const checkoutMode = String(process.env.CHECKOUT_MODE || 'api').toLowerCase();
+        const checkoutMode = normalizeCheckoutMode(process.env.CHECKOUT_MODE || 'api');
         let checkoutOpened = false;
         let checkoutResult = null;
         const planNameOverride = String(CONFIG.planNameOverride || '').trim() || undefined;
@@ -539,14 +543,12 @@ async function run() {
                 });
                 checkoutOpened = true;
             } catch (apiError) {
-                console.warn(`[Warn] API Checkout 失败: ${apiError.message}`);
-                if (debugOnly) {
-                    throw apiError;
-                }
-                if (checkoutMode === 'api') {
+                const checkoutFailure = new Error(formatCheckoutApiFailure(apiError));
+                console.error(`[Checkout] ${checkoutFailure.message}`);
+                if (shouldFallbackToUi(checkoutMode) && !debugOnly) {
                     console.log('[Info] 正在回退到 UI 定价页流程...');
                 } else {
-                    throw apiError;
+                    throw checkoutFailure;
                 }
             }
         }

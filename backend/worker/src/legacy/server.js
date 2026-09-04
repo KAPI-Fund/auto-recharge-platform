@@ -23,6 +23,8 @@ const { buildWorkerRuntimeEnv } = require('./browser-runtime');
 const { querySubscriptionBySession, validateSessionTokenForQuery, cancelAutoRenew, resumeAutoRenew } = require('./subscription-check');
 const gptApi = require('./gpt-api-client');
 const { settleOneTimeCard } = require('./card-lifecycle');
+const { resolveGptApiBilling } = require('./billing-region');
+const { mapGptApiPlanKey } = require('./gpt-api-contract');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -3198,12 +3200,6 @@ function spawnCheckoutDebugWorker({ task, token, sessionRaw, planType, region, p
  * 4. 轮询订单/任务状态，直到终态（success / failed）
  * 5. 将结果写回 task_logs（含 gpt_api_order_id / gpt_api_task_id / gpt_api_raw）
  */
-const GPT_API_PLAN_MAP = Object.freeze({ plus: 'plus', pro_5x: 'pro5x', pro_20x: 'pro20x' });
-
-function mapGptApiPlanKey(planType) {
-    return GPT_API_PLAN_MAP[String(planType || '').trim()] || 'plus';
-}
-
 function parseCardExpiry(value) {
     const match = String(value || '').trim().match(/^(0?[1-9]|1[0-2])\s*\/?\s*(\d{2}|\d{4})$/);
     if (!match) throw new Error('银行卡有效期格式错误，应为 MMYY、MM/YY 或 MM/YYYY');
@@ -3211,7 +3207,7 @@ function parseCardExpiry(value) {
     return { month: Number(match[1]), year };
 }
 
-async function runGptApiWorker({ task, token, session, cdk, planType }) {
+async function runGptApiWorker({ task, token, session, cdk, planType, region }) {
     const { jobKey } = task;
     const sessionPayload = session && typeof session === 'object'
         ? session
@@ -3242,6 +3238,8 @@ async function runGptApiWorker({ task, token, session, cdk, planType }) {
         }
 
         const apiPlanKey = mapGptApiPlanKey(planType);
+        const billing = resolveGptApiBilling({ task, region, cfg });
+        logTask(jobKey, `第三方 API 账单地区=${billing.country} 币种=${billing.currency}（任务/商品地区优先）`);
         await setProgress('running', 10, '正在检查 Session 格式...');
         const inspect = await gptApi.inspectPay(cfg, {
             planKey: apiPlanKey,
@@ -3272,18 +3270,19 @@ async function runGptApiWorker({ task, token, session, cdk, planType }) {
             exp_year: expiry.year,
             cvc: reservedCard.card_cvc,
             name: reservedCard.card_holder || 'API User',
-            country: cfg.country || 'PH'
+            country: billing.country
         };
         logTask(jobKey, `第三方 API 使用卡池预留卡 ...${String(reservedCard.card_number || '').slice(-4)}`);
 
-        // 套餐从 CDK 的 plan_type 同步；国家币种使用协议默认值（PH / PHP）
+        // 套餐从 CDK 的 plan_type 同步；国家币种使用任务/商品地区，
+        // 只有在旧任务缺少地区时才回退到协议配置。
         await setProgress('running', 20, '正在提交代充订单...');
         const idempotencyKey = `cdk-${cdk}`;
         const submit = await gptApi.submitPay(cfg, {
             planKey: apiPlanKey,
             session: sessionPayload,
-            country: cfg.country,
-            currency: cfg.currency,
+            country: billing.country,
+            currency: billing.currency,
             newCard,
             proxy,
             clientRef: `kc-cdk-${cdk}-${jobKey}`,
@@ -3464,6 +3463,13 @@ function spawnActivationWorker({ task, token, sessionRaw, cdk, cdkDetails, clien
         let shouldRollbackCdk = true;
         let lastProgress = 0;
         const accountEmail = extractEmailFromSession(sessionRaw) || task.tokenPreview || '';
+        // The product/task country is the source of truth for the browser
+        // pricing flow.  Do not let the worker silently fall back to the
+        // global payment_region when a product was configured for IN/US/etc.
+        const taskBilling = resolveGptApiBilling({
+            task: cdkDetails,
+            cfg: { country: await store.getPaymentRegion() }
+        });
 
         try {
             for (let attempt = 1; attempt <= MAX_PROCESS_ATTEMPTS; attempt += 1) {
@@ -3490,10 +3496,11 @@ function spawnActivationWorker({ task, token, sessionRaw, cdk, cdkDetails, clien
                     CHATGPT_SESSION_JSON: String(sessionRaw || '').startsWith('{') ? sessionRaw : '',
                     CDK_CODE: cdk,
                     CDK_PLAN_TYPE: cdkDetails.plan_type || 'plus',
+                    PAYMENT_REGION_OVERRIDE: taskBilling.country,
                     PROXY: proxy
                 };
 
-                logTask(task.jobKey, `尝试 ${attempt} 启动自动化 proxy=${proxy ? 'yes' : 'no'}`);
+                logTask(task.jobKey, `尝试 ${attempt} 启动自动化 region=${taskBilling.country} proxy=${proxy ? 'yes' : 'no'}`);
 
                 const run = await spawnWorkerWithBrowser({
                     jobKey: task.jobKey,
@@ -3814,7 +3821,14 @@ async function handleActivationRequest(req, res) {
         reserveForegroundSlot(task.jobKey);
 
         if (useGptApi) {
-            runGptApiWorker({ task, token, session: JSON.parse(storedSession), cdk, planType: cdkDetails.plan_type || 'plus' }).catch((error) => {
+            runGptApiWorker({
+                task,
+                token,
+                session: JSON.parse(storedSession),
+                cdk,
+                planType: cdkDetails.plan_type || 'plus',
+                region: cdkDetails.country || cdkDetails.payment_region || cdkDetails.region
+            }).catch((error) => {
                 console.error(`[GPT API Worker] ${task.jobKey}:`, error);
             });
         } else {

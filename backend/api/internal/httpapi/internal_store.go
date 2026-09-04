@@ -485,6 +485,8 @@ func (s *Server) internalVerifyCDK(code string) (gin.H, error) {
 		"id": cdk.ID, "cdk_code": cdk.Code, "code": cdk.Code, "type": cdk.Type,
 		"plan_type": cdk.PlanType, "used_at": cdk.UsedAt, "cooldown_until": cdk.CooldownUntil,
 		"fail_count": cdk.FailCount, "is_active": cdk.Status != models.CDKDisabled,
+		"country": cdk.Plan.Country, "payment_region": cdk.Plan.Country,
+		"currency": regionCurrency(cdk.Plan.Country),
 	}}, nil
 }
 

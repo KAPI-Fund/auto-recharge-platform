@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
@@ -20,6 +21,19 @@ var errActivationCapacity = errors.New("recharge activation capacity reached")
 
 const activationAdmissionLockSQL = "SELECT pg_advisory_xact_lock(2147483647, 424242)"
 
+const activationGuardReasonNoCardInventory = "NO_AVAILABLE_CARD"
+
+type activationGuardResult struct {
+	status           int
+	message          string
+	reason           string
+	poolID           string
+	provider         string
+	routingStrategy  string
+	cardCreationMode string
+	providers        []string
+}
+
 // checkActivationGuards mirrors the original service's request-time checks.
 // The final CDK transition is still performed under a row lock when the task is created.
 //
@@ -27,37 +41,42 @@ const activationAdmissionLockSQL = "SELECT pg_advisory_xact_lock(2147483647, 424
 // The modern recharge endpoint passes its explicit poolId so the guard checks
 // the same card source that the Worker will eventually acquire from.
 func (s *Server) checkActivationGuards(code, mode, clientIP string, poolIDs ...string) (int, string) {
+	result := s.checkActivationGuardsResult(code, mode, clientIP, poolIDs...)
+	return result.status, result.message
+}
+
+func (s *Server) checkActivationGuardsResult(code, mode, clientIP string, poolIDs ...string) activationGuardResult {
 	if s.configValue("maintenance_mode", "0") == "1" {
-		return http.StatusServiceUnavailable, "系统维护中，请稍后再试"
+		return activationGuardResult{status: http.StatusServiceUnavailable, message: "系统维护中，请稍后再试"}
 	}
 	var cdk models.CDK
 	if err := s.DB.Where("code = ?", strings.TrimSpace(code)).First(&cdk).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
-			return http.StatusForbidden, "CDK 无效、已使用或非自助激活码"
+			return activationGuardResult{status: http.StatusForbidden, message: "CDK 无效、已使用或非自助激活码"}
 		}
-		return http.StatusInternalServerError, "读取 CDK 失败"
+		return activationGuardResult{status: http.StatusInternalServerError, message: "读取 CDK 失败"}
 	}
 	if cdk.Status == models.CDKProcessing {
-		return http.StatusConflict, "该 CDK 正在处理中"
+		return activationGuardResult{status: http.StatusConflict, message: "该 CDK 正在处理中"}
 	}
 	if cdk.Status != models.CDKAvailable || (cdk.Type != "" && cdk.Type != models.CDKTypeSelf) {
 		if cdk.Status == models.CDKUsed {
-			return http.StatusForbidden, "该 CDK 已使用"
+			return activationGuardResult{status: http.StatusForbidden, message: "该 CDK 已使用"}
 		}
-		return http.StatusForbidden, "CDK 无效、已使用或非自助激活码"
+		return activationGuardResult{status: http.StatusForbidden, message: "CDK 无效、已使用或非自助激活码"}
 	}
 	if cdk.CooldownUntil != nil && cdk.CooldownUntil.After(time.Now()) {
-		return http.StatusForbidden, "该卡密连续无资格尝试过多，请稍后再试"
+		return activationGuardResult{status: http.StatusForbidden, message: "该卡密连续无资格尝试过多，请稍后再试"}
 	}
 	if strings.TrimSpace(clientIP) != "" {
 		var limit models.ActivationAttemptLimit
 		result := s.DB.Where("scope_type = ? AND scope_key = ?", "ip", clientIP).Limit(1).Find(&limit)
 		if result.Error != nil {
-			return http.StatusInternalServerError, "读取 IP 冷却状态失败"
+			return activationGuardResult{status: http.StatusInternalServerError, message: "读取 IP 冷却状态失败"}
 		}
 		if result.RowsAffected > 0 {
 			if limit.CooldownUntil != nil && limit.CooldownUntil.After(time.Now()) {
-				return http.StatusForbidden, "当前 IP 连续无资格尝试过多，请稍后再试"
+				return activationGuardResult{status: http.StatusForbidden, message: "当前 IP 连续无资格尝试过多，请稍后再试"}
 			}
 		}
 	}
@@ -68,19 +87,24 @@ func (s *Server) checkActivationGuards(code, mode, clientIP string, poolIDs ...s
 		}
 		requiresInventory, err := s.activationRequiresPreexistingCard(poolID)
 		if err != nil {
-			return http.StatusInternalServerError, "读取卡池失败"
+			return activationGuardResult{status: http.StatusInternalServerError, message: "读取卡池失败"}
 		}
 		if requiresInventory {
 			available, err := s.hasActivationCardInventory(poolID)
 			if err != nil {
-				return http.StatusInternalServerError, "读取卡池失败"
+				return activationGuardResult{status: http.StatusInternalServerError, message: "读取卡池失败"}
 			}
 			if !available {
-				return http.StatusServiceUnavailable, "银行卡池暂无可用卡片，请先在后台导入银行卡后再试"
+				return activationGuardResult{
+					status:  http.StatusServiceUnavailable,
+					message: "银行卡池暂无可用卡片，请先在后台导入银行卡后再试",
+					reason:  activationGuardReasonNoCardInventory,
+					poolID:  strings.TrimSpace(poolID),
+				}
 			}
 		}
 	}
-	return 0, ""
+	return activationGuardResult{}
 }
 
 // activationRequiresPreexistingCard keeps the old request-time inventory
@@ -357,23 +381,151 @@ func (s *Server) guardOrAbort(c *gin.Context, code, mode, clientIP string, email
 }
 
 func (s *Server) guardOrAbortForPool(c *gin.Context, code, mode, clientIP, poolID, email string) bool {
-	status, message := s.checkActivationGuards(code, mode, clientIP, poolID)
-	if status == 0 {
+	result := s.checkActivationGuardsResult(code, mode, clientIP, poolID)
+	if result.status == 0 {
 		return true
 	}
-	if status == http.StatusServiceUnavailable && strings.Contains(message, "银行卡池") {
-		payload := map[string]string{"cdk": strings.TrimSpace(code), "ip": strings.TrimSpace(clientIP), "message": message}
+	if result.reason == activationGuardReasonNoCardInventory {
+		s.recordActivationAdmissionFailure(c, mode, result)
+		payload := map[string]string{"cdk": strings.TrimSpace(code), "ip": strings.TrimSpace(clientIP), "message": result.message}
 		if strings.TrimSpace(email) != "" {
 			payload["email"] = strings.TrimSpace(email)
 		}
 		go s.notifyTelegramEvent("card_pool_empty", payload)
 	}
-	if status >= http.StatusInternalServerError {
-		publicFail(c, status, message)
+	if result.status >= http.StatusInternalServerError {
+		publicFail(c, result.status, result.message)
 		return false
 	}
-	c.JSON(status, gin.H{"success": false, "message": message})
+	c.JSON(result.status, gin.H{"success": false, "message": result.message})
 	return false
+}
+
+// recordActivationAdmissionFailure writes a safe, task-independent runtime log
+// for failures that happen before a RechargeTask exists. This is intentionally
+// synchronous: the request must not return a 503 while silently losing the
+// diagnostic record in a goroutine.
+func (s *Server) recordActivationAdmissionFailure(c *gin.Context, mode string, result activationGuardResult) {
+	if result.reason != activationGuardReasonNoCardInventory {
+		return
+	}
+
+	traceID := requestTraceID(c)
+	if result.poolID == "" || result.provider == "" || result.routingStrategy == "" || result.cardCreationMode == "" || len(result.providers) == 0 {
+		admissionContext := s.activationAdmissionContext(result.poolID)
+		if result.poolID == "" {
+			result.poolID = admissionContext.poolID
+		}
+		if result.provider == "" {
+			result.provider = admissionContext.provider
+		}
+		if result.routingStrategy == "" {
+			result.routingStrategy = admissionContext.routingStrategy
+		}
+		if result.cardCreationMode == "" {
+			result.cardCreationMode = admissionContext.cardCreationMode
+		}
+		if len(result.providers) == 0 {
+			result.providers = admissionContext.providers
+		}
+	}
+
+	text := formatActivationAdmissionFailureLog(traceID, mode, result)
+	log.Printf("%s", text)
+	if s == nil || s.DB == nil {
+		return
+	}
+	if err := s.DB.Create(&models.RuntimeLog{
+		ID:      db.NewID("runtime"),
+		JobKey:  truncate("admission:"+traceID, 96),
+		TraceID: traceID,
+		Level:   "warn",
+		Source:  "activation-guard",
+		Text:    text,
+	}).Error; err != nil {
+		log.Printf("[activation-guard] trace_id=%s runtime log persist failed: %v", traceID, err)
+	}
+}
+
+type activationAdmissionContext struct {
+	poolID           string
+	provider         string
+	routingStrategy  string
+	cardCreationMode string
+	providers        []string
+}
+
+func (s *Server) activationAdmissionContext(poolID string) activationAdmissionContext {
+	result := activationAdmissionContext{}
+	if s != nil && s.CardPools != nil {
+		// ResolvePool already applies the effective admin configuration for the
+		// default pool. Reuse that result before falling back to individual
+		// config reads, keeping the failure path cheap and internally consistent.
+		if pool, err := s.CardPools.ResolvePool(context.Background(), strings.TrimSpace(poolID)); err == nil {
+			result.poolID = pool.ID
+			result.provider = strings.ToUpper(strings.TrimSpace(pool.DefaultProvider))
+			result.routingStrategy = strings.ToUpper(strings.TrimSpace(pool.RoutingStrategy))
+			result.cardCreationMode = strings.ToUpper(strings.TrimSpace(pool.CardCreationMode))
+			for _, route := range pool.Providers {
+				if route.Enabled && strings.TrimSpace(route.Provider) != "" {
+					result.providers = append(result.providers, strings.ToUpper(strings.TrimSpace(route.Provider)))
+				}
+			}
+		}
+	}
+	if result.poolID == "" {
+		result.poolID = firstNonEmpty(strings.TrimSpace(poolID), s.configValue("card_pool_default_id", "pool_legacy"))
+	}
+	if result.provider == "" {
+		result.provider = strings.ToUpper(strings.TrimSpace(s.configValue("card_pool_default_provider", "LOCAL_TEXT")))
+	}
+	if result.routingStrategy == "" {
+		result.routingStrategy = strings.ToUpper(strings.TrimSpace(s.configValue("card_pool_routing", "FIXED")))
+	}
+	if result.cardCreationMode == "" {
+		result.cardCreationMode = strings.ToUpper(strings.TrimSpace(s.configValue("card_pool_card_creation_mode", "POOL_ONLY")))
+	}
+	if result.poolID == "" {
+		result.poolID = "pool_legacy"
+	}
+	if result.provider == "" {
+		result.provider = "LOCAL_TEXT"
+	}
+	if result.routingStrategy == "" {
+		result.routingStrategy = "FIXED"
+	}
+	if result.cardCreationMode == "" {
+		result.cardCreationMode = "POOL_ONLY"
+	}
+
+	if len(result.providers) == 0 && result.provider != "" {
+		result.providers = []string{result.provider}
+	}
+	return result
+}
+
+func formatActivationAdmissionFailureLog(traceID, mode string, result activationGuardResult) string {
+	poolID := sanitizeLogValue(firstNonEmpty(result.poolID, "unknown"))
+	provider := sanitizeLogValue(firstNonEmpty(result.provider, "unknown"))
+	routing := sanitizeLogValue(firstNonEmpty(result.routingStrategy, "unknown"))
+	creationMode := sanitizeLogValue(firstNonEmpty(result.cardCreationMode, "unknown"))
+	mode = sanitizeLogValue(firstNonEmpty(strings.TrimSpace(mode), "unknown"))
+	providers := make([]string, 0, len(result.providers))
+	for _, item := range result.providers {
+		item = sanitizeLogValue(strings.ToUpper(strings.TrimSpace(item)))
+		if item != "" {
+			providers = append(providers, item)
+		}
+	}
+	checkedProviders := strings.Join(providers, ",")
+	if checkedProviders == "" {
+		checkedProviders = "unknown"
+	}
+	return fmt.Sprintf("[充值准入] 任务创建失败：银行卡池暂无可用卡片 trace_id=%s pool_id=%s provider=%s checked_providers=%s routing=%s creation_mode=%s reason=%s available_cards=0 mode=%s", sanitizeLogValue(traceID), poolID, provider, checkedProviders, routing, creationMode, activationGuardReasonNoCardInventory, mode)
+}
+
+func sanitizeLogValue(value string) string {
+	return strings.NewReplacer("\r", "", "\n", "", "\t", " ").Replace(strings.TrimSpace(value))
 }
 
 func recordAttemptFailureTx(tx *gorm.DB, scopeType, scopeKey string, now time.Time) (bool, error) {
