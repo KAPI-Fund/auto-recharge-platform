@@ -2,11 +2,13 @@ package httpapi
 
 import (
 	"errors"
+	"net/http/httptest"
 	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/gin-gonic/gin"
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/cardpool"
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/models"
 	"gorm.io/gorm"
@@ -186,6 +188,62 @@ func TestCheckActivationGuardsAllowsExternalOnDemandWithoutLegacyCard(t *testing
 	if status != 0 || message != "" {
 		t.Fatalf("checkActivationGuards() = (%d, %q), want (0, empty)", status, message)
 	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestFormatActivationAdmissionFailureLogContainsResourceContextOnly(t *testing.T) {
+	text := formatActivationAdmissionFailureLog("trace-card-empty", "browser", activationGuardResult{
+		reason:           activationGuardReasonNoCardInventory,
+		poolID:           "pool_legacy",
+		provider:         "LOCAL_TEXT",
+		routingStrategy:  "FIXED",
+		cardCreationMode: "CREATE_ON_DEMAND",
+		providers:        []string{"LOCAL_TEXT"},
+	})
+
+	for _, want := range []string{
+		"trace_id=trace-card-empty",
+		"pool_id=pool_legacy",
+		"provider=LOCAL_TEXT",
+		"routing=FIXED",
+		"creation_mode=CREATE_ON_DEMAND",
+		"reason=NO_AVAILABLE_CARD",
+		"available_cards=0",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("formatted admission log = %q, missing %q", text, want)
+		}
+	}
+	for _, forbidden := range []string{"Session", "accessToken", "4111111111111111", "CVC", "E2E-SECRET-CDK"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("formatted admission log contains sensitive marker %q: %q", forbidden, text)
+		}
+	}
+}
+
+func TestRecordActivationAdmissionFailurePersistsRuntimeLog(t *testing.T) {
+	database, mock := newAssetRecoveryMock(t)
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Set("trace_id", "trace-card-empty")
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO "runtime_logs"`)).
+		WithArgs(sqlmock.AnyArg(), "admission:trace-card-empty", "trace-card-empty", "warn", "activation-guard", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	server := &Server{DB: database}
+	server.recordActivationAdmissionFailure(context, "browser", activationGuardResult{
+		reason:           activationGuardReasonNoCardInventory,
+		poolID:           "pool_legacy",
+		provider:         "LOCAL_TEXT",
+		routingStrategy:  "FIXED",
+		cardCreationMode: "POOL_ONLY",
+		providers:        []string{"LOCAL_TEXT"},
+	})
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)
 	}
