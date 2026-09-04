@@ -86,6 +86,8 @@ services:
       HCAPTCHA_CAPTCHA_PLATFORM_API_KEY: ${HCAPTCHA_CAPTCHA_PLATFORM_API_KEY:-}
       HCAPTCHA_CAPTCHA_PLATFORM_API_URL: ${HCAPTCHA_CAPTCHA_PLATFORM_API_URL:-https://api.capsolver.com}
       HCAPTCHA_CAPTCHA_PLATFORM_TIMEOUT: ${HCAPTCHA_CAPTCHA_PLATFORM_TIMEOUT:-180}
+    # Worker control API is for Compose-internal API -> Worker traffic only.
+    ports: !override []
 
   web:
     ports: !override
