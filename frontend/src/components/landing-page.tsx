@@ -49,10 +49,14 @@ function planIsSoldOut(plan: Plan) {
   return Boolean((plan.saleLimit || 0) > 0 && (plan.soldCount || 0) >= (plan.saleLimit || 0));
 }
 
+function planIsUnavailable(plan: Plan) {
+  return planIsSoldOut(plan) || plan.purchaseEnabled === false || (plan.saleLimit || 0) <= 0;
+}
+
 function planStockLabel(plan: Plan) {
   if (planIsSoldOut(plan)) return "已售罄，补货中";
   if ((plan.saleLimit || 0) > 0) return `剩余 ${Math.max(0, plan.remainingQuantity ?? (plan.saleLimit || 0) - (plan.soldCount || 0))} 件`;
-  return "不限量供应";
+  return "库存未配置";
 }
 
 export function LandingPage() {
@@ -115,14 +119,15 @@ export function LandingPage() {
               {loading ? <div className="hero-pricing-preview__loading"><span className="landing-spinner" />正在读取套餐</div> : heroPlans.map((plan, index) => {
                 const copy = planCopy(plan);
                 const soldOut = planIsSoldOut(plan);
+                const unavailable = planIsUnavailable(plan);
                 const card = <>
                   <div className="hero-price-card__top"><span>{index === 0 ? "最受欢迎" : copy.eyebrow}</span><strong>{priceText(plan)}</strong></div>
                   <h2>{plan.name}</h2>
                   <p>{plan.description || copy.title}</p>
-                  <small className={`hero-price-card__stock ${soldOut ? "is-sold-out" : ""}`}>{planStockLabel(plan)}</small>
-                  <span className={`hero-price-card__link ${soldOut ? "is-sold-out" : ""}`}>{soldOut ? "已售罄，补货中" : <>查看方案 <ArrowRight aria-hidden="true" /></>}</span>
+                  <small className={`hero-price-card__stock ${unavailable ? "is-sold-out" : ""}`}>{planStockLabel(plan)}</small>
+                  <span className={`hero-price-card__link ${unavailable ? "is-sold-out" : ""}`}>{unavailable ? (soldOut ? "已售罄，补货中" : "库存未配置") : <>查看方案 <ArrowRight aria-hidden="true" /></>}</span>
                 </>;
-                return soldOut
+                return unavailable
                   ? <div key={plan.code} className={`hero-price-card hero-price-card--${copy.accent} ${index === 0 ? "is-featured" : ""} is-sold-out`}>{card}</div>
                   : <Link key={plan.code} href={`/recharge?tab=purchase&plan=${encodeURIComponent(plan.code)}`} className={`hero-price-card hero-price-card--${copy.accent} ${index === 0 ? "is-featured" : ""}`}>{card}</Link>;
               })}
@@ -142,12 +147,13 @@ export function LandingPage() {
         <div className="landing-plans-grid">
           {featuredPlans.map((plan, index) => {
             const copy = planCopy(plan);
+            const unavailable = planIsUnavailable(plan);
             return <article key={plan.code} className={`landing-plan-card landing-plan-card--${copy.accent} ${index === 1 ? "is-featured" : ""}`}>
               <div className="landing-plan-card__top"><span>{copy.eyebrow}</span>{index === 1 ? <b>推荐</b> : null}</div>
               <h3>{plan.name}</h3><p className="landing-plan-card__description">{plan.description || copy.title}</p>
               <div className="landing-plan-card__price"><strong>{priceText(plan)}</strong><span>平台价</span></div>
               <ul>{copy.bullets.map((bullet) => <li key={bullet}><Check aria-hidden="true" />{bullet}</li>)}</ul>
-              {planIsSoldOut(plan) ? <span className="landing-plan-card__cta is-sold-out">已售罄，补货中</span> : <Link href={`/recharge?tab=purchase&plan=${encodeURIComponent(plan.code)}`} className="landing-plan-card__cta">购买此商品<ArrowRight aria-hidden="true" /></Link>}
+              {unavailable ? <span className="landing-plan-card__cta is-sold-out">{planIsSoldOut(plan) ? "已售罄，补货中" : "库存未配置"}</span> : <Link href={`/recharge?tab=purchase&plan=${encodeURIComponent(plan.code)}`} className="landing-plan-card__cta">购买此商品<ArrowRight aria-hidden="true" /></Link>}
             </article>;
           })}
         </div>

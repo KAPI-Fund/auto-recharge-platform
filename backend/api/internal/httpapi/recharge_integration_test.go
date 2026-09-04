@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/cardpool"
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/config"
 	appdb "github.com/kc-catk/auto-recharge-platform/backend/api/internal/db"
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/models"
@@ -272,6 +273,125 @@ func TestRechargeConcurrencyExternalHTTPFlow(t *testing.T) {
 		t.Fatalf("legacy queued recovery report=%+v err=%v", report, err)
 	}
 	assertIntegrationTaskState(t, database, legacyTaskID, models.TaskFailed, "queue_timeout")
+}
+
+func TestRechargeTaskHTTPGuardUsesConfiguredPoolCreationMode(t *testing.T) {
+	databaseURL := strings.TrimSpace(os.Getenv("RECHARGE_TEST_DATABASE_URL"))
+	redisURL := strings.TrimSpace(os.Getenv("RECHARGE_TEST_REDIS_URL"))
+	if databaseURL == "" || redisURL == "" {
+		t.Skip("set RECHARGE_TEST_DATABASE_URL and RECHARGE_TEST_REDIS_URL to run the real PostgreSQL/Redis HTTP flow")
+	}
+
+	database, err := appdb.Open(databaseURL)
+	if err != nil {
+		t.Fatalf("open integration database: %v", err)
+	}
+	if err := appdb.Migrate(database); err != nil {
+		t.Fatalf("migrate integration database: %v", err)
+	}
+	sqlDB, err := database.DB()
+	if err != nil {
+		t.Fatalf("get integration sql db: %v", err)
+	}
+	defer sqlDB.Close()
+
+	queueName := "recharge:guard-integration:" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	queueClient, err := queue.New(redisURL, queueName)
+	if err != nil {
+		t.Fatalf("open integration redis: %v", err)
+	}
+	defer queueClient.Close()
+	ctx := context.Background()
+	if err := queueClient.Ping(ctx); err != nil {
+		t.Fatalf("ping integration redis: %v", err)
+	}
+	if err := queueClient.Redis.Del(ctx, queueName, queueName+":admission").Err(); err != nil {
+		t.Fatalf("clear integration redis keys: %v", err)
+	}
+
+	server := &Server{
+		DB: database,
+		Q:  queueClient,
+		Cfg: config.Config{
+			SessionEncryptionKey:     "integration-session-key",
+			WorkerAPIToken:           "integration-worker-token",
+			DefaultRechargeMode:      "browser",
+			TaskQueuedTimeoutSeconds: 600,
+			TaskLeaseTimeoutSeconds:  60,
+			CORSOrigins:              []string{"*"},
+		},
+		CardPools: cardpool.NewService(database, cardpool.NewProviderRegistry(), nil),
+	}
+	httpServer := httptest.NewServer(NewRouter(server))
+	defer httpServer.Close()
+
+	plan := models.Plan{}
+	if err := database.Where("code = ?", "plus").First(&plan).Error; err != nil {
+		t.Fatalf("load integration plan: %v", err)
+	}
+
+	externalPoolID := "integration-external-" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	localPoolID := "integration-local-" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	for _, pool := range []models.CardPool{
+		{ID: externalPoolID, Name: externalPoolID, Type: string(cardpool.PoolTypeExternalAPI), UsageType: string(cardpool.UsageOneTime), RoutingStrategy: string(cardpool.RoutingFixed), DefaultProvider: "KIMOOX", CardCreationMode: string(cardpool.CardCreationOnDemand), Currency: "USD", Enabled: true},
+		{ID: localPoolID, Name: localPoolID, Type: string(cardpool.PoolTypeLocal), UsageType: string(cardpool.UsageOneTime), RoutingStrategy: string(cardpool.RoutingFixed), DefaultProvider: "LOCAL_TEXT", CardCreationMode: string(cardpool.CardCreationOnDemand), Currency: "USD", Enabled: true},
+	} {
+		if err := database.Create(&pool).Error; err != nil {
+			t.Fatalf("create integration pool %s: %v", pool.ID, err)
+		}
+	}
+	if err := database.Create(&models.CardPoolProvider{ID: "integration-route-external-" + strings.ReplaceAll(uuid.NewString(), "-", ""), PoolID: externalPoolID, Provider: "KIMOOX", Enabled: true, Priority: 1, Weight: 100}).Error; err != nil {
+		t.Fatalf("create external provider route: %v", err)
+	}
+	if err := database.Create(&models.CardPoolProvider{ID: "integration-route-local-" + strings.ReplaceAll(uuid.NewString(), "-", ""), PoolID: localPoolID, Provider: "LOCAL_TEXT", Enabled: true, Priority: 1, Weight: 100}).Error; err != nil {
+		t.Fatalf("create local provider route: %v", err)
+	}
+
+	cdkCodes := []string{
+		"GUARD-EXTERNAL-" + strings.ReplaceAll(uuid.NewString(), "-", ""),
+		"GUARD-LOCAL-" + strings.ReplaceAll(uuid.NewString(), "-", ""),
+	}
+	cdkIDs := []string{"integration-guard-cdk-external-" + strings.ReplaceAll(uuid.NewString(), "-", ""), "integration-guard-cdk-local-" + strings.ReplaceAll(uuid.NewString(), "-", "")}
+	for index, code := range cdkCodes {
+		if err := database.Create(&models.CDK{ID: cdkIDs[index], Code: code, PlanID: plan.ID, PlanType: plan.Code, Type: models.CDKTypeSelf, Status: models.CDKAvailable}).Error; err != nil {
+			t.Fatalf("create guard integration cdk %s: %v", code, err)
+		}
+	}
+	defer func() {
+		_ = database.Where("id IN ?", cdkIDs).Delete(&models.CDK{}).Error
+		_ = database.Where("pool_id IN ?", []string{externalPoolID, localPoolID}).Delete(&models.CardPoolProvider{}).Error
+		_ = database.Where("id IN ?", []string{externalPoolID, localPoolID}).Delete(&models.CardPool{}).Error
+		_ = queueClient.Redis.Del(ctx, queueName, queueName+":admission").Err()
+	}()
+
+	session := integrationAccessToken()
+	status, response, requestErr, _ := integrationJSONRequest(http.MethodPost, httpServer.URL+"/api/v1/recharge/tasks", map[string]any{
+		"code": cdkCodes[0], "session": session, "mode": "browser", "poolId": externalPoolID,
+	}, "trace-guard-external", "")
+	if requestErr != nil || status != http.StatusAccepted {
+		t.Fatalf("external CREATE_ON_DEMAND request status=%d err=%v response=%#v, want 202", status, requestErr, response)
+	}
+	externalTask, _ := response["task"].(map[string]any)
+	externalTaskID, _ := externalTask["id"].(string)
+	if externalTaskID == "" {
+		t.Fatalf("external CREATE_ON_DEMAND response has no task id: %#v", response)
+	}
+	if err := database.Where("id = ?", externalTaskID).Delete(&models.RechargeTask{}).Error; err != nil {
+		t.Fatalf("delete external guard task: %v", err)
+	}
+	if err := database.Model(&models.CDK{}).Where("id = ?", cdkIDs[0]).Update("status", models.CDKAvailable).Error; err != nil {
+		t.Fatalf("reset external guard cdk: %v", err)
+	}
+
+	status, response, requestErr, _ = integrationJSONRequest(http.MethodPost, httpServer.URL+"/api/v1/recharge/tasks", map[string]any{
+		"code": cdkCodes[1], "session": session, "mode": "browser", "poolId": localPoolID,
+	}, "trace-guard-local", "")
+	if requestErr != nil || status != http.StatusServiceUnavailable {
+		t.Fatalf("local empty inventory request status=%d err=%v response=%#v, want 503", status, requestErr, response)
+	}
+	if response["message"] != "内部错误，请联系客服" {
+		t.Fatalf("local empty inventory response=%#v, want public generic error", response)
+	}
 }
 
 func integrationAccessToken() string {

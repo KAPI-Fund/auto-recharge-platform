@@ -20,6 +20,21 @@ func TestBuildCheckoutPayloadSGPlus(t *testing.T) {
 	}
 }
 
+func TestBuildCheckoutPayloadIndiaGo(t *testing.T) {
+	payload := BuildCheckoutPayload("go", "IN", "INR", "")
+	if payload.PlanName != "chatgptgoplan" {
+		t.Fatalf("plan_name=%s, want chatgptgoplan", payload.PlanName)
+	}
+	if payload.BillingDetails["country"] != "IN" || payload.BillingDetails["currency"] != "INR" {
+		t.Fatalf("billing=%v, want IN/INR", payload.BillingDetails)
+	}
+
+	legacyOverride := BuildCheckoutPayload("plus", "IN", "INR", "chatgptgoplan")
+	if legacyOverride.PlanName != "chatgptgoplan" {
+		t.Fatalf("legacy Go override plan_name=%s, want chatgptgoplan", legacyOverride.PlanName)
+	}
+}
+
 func TestParseCheckoutAndPricing(t *testing.T) {
 	checkout := ParseCheckout(200, []byte(`{"checkout_session_id":"cs_live_abc123","client_secret":"cs_live_abc123_secret_zzz","publishable_key":"pk_live_example"}`))
 	if !checkout.OK || checkout.SessionID != "cs_live_abc123" || checkout.PublishableKey != "pk_live_example" {

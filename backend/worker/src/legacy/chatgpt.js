@@ -70,7 +70,7 @@ async function createHostedCheckoutLink({ accessToken, planType = 'plus', planNa
 
     const region = String(country || 'PH').toUpperCase();
     const billingCurrency = String(currency || getRegionConfig(region)?.currency || 'PHP').toUpperCase();
-    const planNameResolved = String(planName || store.resolvePlanName(planType)).trim();
+    const planNameResolved = String(store.resolvePlanName(planName || planType)).trim();
     const payload = buildCheckoutPayload(planNameResolved, region, billingCurrency);
 
     const response = await axios.post(
@@ -176,7 +176,7 @@ class ChatGPTService {
      */
     async createCheckoutSession(planType, country, currency, planNameOverride) {
         try {
-            const planName = String(planNameOverride || store.resolvePlanName(planType)).trim();
+            const planName = String(store.resolvePlanName(planNameOverride || planType)).trim();
             const payload = buildCheckoutPayload(planName, country, currency);
             console.log(`[ChatGPT] 创建 Checkout Session: plan_name=${planName}, country=${country}, currency=${currency}, checkout_ui_mode=${payload.checkout_ui_mode}`);
 

@@ -17,9 +17,7 @@ type CheckoutPayload struct {
 }
 
 func BuildCheckoutPayload(planType, country, currency, planName string) CheckoutPayload {
-	if strings.TrimSpace(planName) == "" {
-		planName = region.PlanName(planType)
-	}
+	planName = region.NormalizePlanName(planType, planName)
 	return CheckoutPayload{
 		EntryPoint:     "all_plans_pricing_modal",
 		PlanName:       planName,

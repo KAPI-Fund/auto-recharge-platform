@@ -239,7 +239,7 @@ func (s *Server) createTask(c *gin.Context) {
 			return
 		}
 	}
-	if !s.guardOrAbort(c, code, mode, c.ClientIP(), subscriptionEmailFromRaw(sessionRaw, sessionToken)) {
+	if !s.guardOrAbortForPool(c, code, mode, c.ClientIP(), strings.TrimSpace(input.PoolID), subscriptionEmailFromRaw(sessionRaw, sessionToken)) {
 		return
 	}
 	ciphertext, err := security.Encrypt(sessionRaw, s.Cfg.SessionEncryptionKey)
@@ -392,7 +392,7 @@ func (s *Server) taskSecret(c *gin.Context) {
 			return
 		}
 	}
-	planType := firstNonEmpty(cdk.PlanType, plan.Code, "plus")
+	planType := normalizePlanType(firstNonEmpty(cdk.PlanType, plan.Code, "plus"))
 	planName := db.NormalizeProviderPlanName(planType, firstNonEmpty(task.PlanNameOverride, cdk.Plan.ProviderPlanName, plan.ProviderPlanName, plan.Code, planType))
 	cdkCode := firstNonEmpty(cdk.Code, task.CDKCode)
 	region := paymentregion.Normalize(task.PaymentRegion)

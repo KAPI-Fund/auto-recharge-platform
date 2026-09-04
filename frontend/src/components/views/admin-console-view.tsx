@@ -3614,7 +3614,7 @@ function emptyStoreProductForm(options: Row = {}): StoreProductForm {
     country,
     currency: text(options, "currency", ""),
     price: String(num(defaults, "price", 0)),
-    saleLimit: String(num(defaults, "saleLimit", 0)),
+    saleLimit: String(num(defaults, "saleLimit", 100)),
     sortOrder: String(num(defaults, "sortOrder", 0)),
     published: bool(defaults, "published"),
   };
@@ -3660,7 +3660,7 @@ function StoreProductsPanel({ storeProductRows, setStoreProductRows, storeProduc
       country,
       currency,
       price: String(num(row, "price", 20)),
-      saleLimit: String(num(row, "saleLimit", 0)),
+      saleLimit: String(num(row, "saleLimit", 100)),
       sortOrder: String(num(row, "sortOrder", 10)),
       published: bool(row, "published"),
     });
@@ -3705,7 +3705,7 @@ function StoreProductsPanel({ storeProductRows, setStoreProductRows, storeProduc
           labelClassName="text-xs font-semibold text-slate-600"
         />
         <label className="text-xs font-semibold text-slate-600">价格<input type="number" min="0.01" step="0.01" value={form.price} onChange={(event) => update("price", event.target.value)} className={inputClass} /></label>
-        <label className="text-xs font-semibold text-slate-600">可售数量（0=不限量）<input type="number" min="0" step="1" value={form.saleLimit} onChange={(event) => update("saleLimit", event.target.value)} className={inputClass} /></label>
+        <label className="text-xs font-semibold text-slate-600">可售数量（发布时必须大于 0）<input type="number" min={form.published ? 1 : 0} step="1" value={form.saleLimit} onChange={(event) => update("saleLimit", event.target.value)} className={inputClass} /></label>
         <label className="text-xs font-semibold text-slate-600">平台售卡币种<select value={currency} disabled className={inputClass}><option value={currency}>{currency}</option></select></label>
         <label className="text-xs font-semibold text-slate-600">排序<input type="number" value={form.sortOrder} onChange={(event) => update("sortOrder", event.target.value)} className={inputClass} /></label>
       </div>
@@ -3721,7 +3721,7 @@ function StoreProductsPanel({ storeProductRows, setStoreProductRows, storeProduc
         { key: "code", label: "编码", render: (row) => <code>{text(row, "code")}</code> },
         { key: "name", label: "商品", render: (row) => <span className="font-semibold text-slate-900">{text(row, "name")}</span> },
         { key: "price", label: "价格", render: (row) => text(row, "priceText", text(row, "price")) },
-        { key: "inventory", label: "可售数量", render: (row) => <div className="flex flex-col gap-1"><span className="font-medium text-slate-800">{num(row, "saleLimit", 0) > 0 ? `${num(row, "remainingQuantity", 0)} / ${num(row, "saleLimit", 0)}` : "不限量"}</span><span className="text-xs text-slate-500">已售 {num(row, "soldCount", 0)}</span></div> },
+        { key: "inventory", label: "可售数量", render: (row) => <div className="flex flex-col gap-1"><span className="font-medium text-slate-800">{num(row, "saleLimit", 0) > 0 ? `${num(row, "remainingQuantity", 0)} / ${num(row, "saleLimit", 0)}` : "未配置"}</span><span className="text-xs text-slate-500">已售 {num(row, "soldCount", 0)}</span></div> },
         { key: "deliveryMode", label: "交付方式", render: () => <span className="text-xs text-slate-500">支付后即时生成 CDK</span> },
         { key: "published", label: "状态", render: (row) => <div className="flex flex-wrap items-center gap-2"><Badge label={text(row, "published_label", "-")} tone={backendTone(row, "published_tone")} />{bool(row, "soldOut") ? <Badge label="已售罄，补货中" tone="danger" /> : null}</div> },
         { key: "actions", label: "操作", render: (row) => <div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" onClick={() => edit(row)}><Pencil className="h-3.5 w-3.5" />编辑</Button><Button variant="outline" size="sm" onClick={() => void toggle(row)}>{text(row, "published_action_label", "切换发布状态")}</Button></div> },

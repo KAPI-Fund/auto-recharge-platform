@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -16,6 +17,8 @@ import (
 
 var storeProductCodePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{1,63}$`)
 
+var errStoreProductInventoryNotConfigured = errors.New("已发布商品的可售数量必须是大于 0 的整数")
+
 var storeProductProviderPlans = map[string]bool{
 	"chatgptplusplan": true,
 	"chatgptprolite":  true,
@@ -24,7 +27,8 @@ var storeProductProviderPlans = map[string]bool{
 }
 
 // decoratePlanInventory adds computed storefront availability without
-// persisting the projection fields. A sale limit of zero means unlimited.
+// persisting the projection fields. A non-positive sale limit is invalid for
+// a published storefront product and is never treated as unlimited.
 func decoratePlanInventory(plan *models.Plan) {
 	if plan == nil {
 		return
@@ -39,19 +43,31 @@ func decoratePlanInventory(plan *models.Plan) {
 		plan.RemainingQuantity = &remaining
 		plan.SoldOut = remaining == 0
 	}
-	plan.PurchaseEnabled = plan.Active && !plan.SoldOut
+	plan.PurchaseEnabled = plan.Active && plan.SaleLimit > 0 && !plan.SoldOut
 	switch {
 	case plan.SoldOut:
 		plan.AvailabilityLabel = "已售罄，补货中"
 	case !plan.Active:
 		plan.AvailabilityLabel = "已下架"
+	case plan.SaleLimit <= 0:
+		plan.AvailabilityLabel = "库存未配置"
 	default:
 		plan.AvailabilityLabel = "在售"
 	}
 }
 
 func planHasSaleCapacity(plan models.Plan) bool {
-	return plan.SaleLimit <= 0 || plan.SoldCount < plan.SaleLimit
+	return plan.SaleLimit > 0 && plan.SoldCount < plan.SaleLimit
+}
+
+func validateStoreProductInventory(published bool, saleLimit int) error {
+	if published && saleLimit <= 0 {
+		return errStoreProductInventoryNotConfigured
+	}
+	if saleLimit < 0 {
+		return errors.New("可售数量必须是大于等于 0 的整数")
+	}
+	return nil
 }
 
 func storeProductResponse(plan models.Plan) gin.H {
@@ -92,7 +108,7 @@ func storeProductOptions() gin.H {
 		},
 		"countries":      countries,
 		"paymentRegions": countries,
-		"defaults":       gin.H{"providerPlanName": db.ProviderPlanNameForCode("plus"), "country": "US", "currency": models.PlatformStoreCurrency, "price": 20, "saleLimit": 0, "sortOrder": 10, "published": true},
+		"defaults":       gin.H{"providerPlanName": db.ProviderPlanNameForCode("plus"), "country": "US", "currency": models.PlatformStoreCurrency, "price": 20, "saleLimit": models.DefaultStoreSaleLimit, "sortOrder": 10, "published": true},
 	}
 }
 
@@ -167,6 +183,14 @@ func (s *Server) upsertStoreProduct(c *gin.Context) {
 	var existing models.Plan
 	result := s.DB.Where("code = ?", input.Code).First(&existing)
 	if result.Error == nil {
+		effectiveSaleLimit := existing.SaleLimit
+		if input.SaleLimit != nil {
+			effectiveSaleLimit = saleLimit
+		}
+		if err := validateStoreProductInventory(published, effectiveSaleLimit); err != nil {
+			fail(c, http.StatusBadRequest, err.Error())
+			return
+		}
 		updates := map[string]any{
 			"name": plan.Name, "description": plan.Description, "provider_plan_name": plan.ProviderPlanName,
 			"country": plan.Country, "currency": plan.Currency, "price": plan.Price, "sort_order": plan.SortOrder, "active": plan.Active,
@@ -184,6 +208,10 @@ func (s *Server) upsertStoreProduct(c *gin.Context) {
 			plan.SaleLimit = saleLimit
 		}
 	} else if result.Error == gorm.ErrRecordNotFound {
+		if err := validateStoreProductInventory(published, saleLimit); err != nil {
+			fail(c, http.StatusBadRequest, err.Error())
+			return
+		}
 		// Plan.Active has a database default of true. Insert a value map so an
 		// explicit published=false is persisted instead of being treated as a
 		// zero value by GORM's default-value callback.
@@ -225,6 +253,12 @@ func (s *Server) updateStoreProduct(c *gin.Context) {
 		fail(c, http.StatusNotFound, "商品不存在")
 		return
 	}
+	if *input.Published {
+		if err := validateStoreProductInventory(true, plan.SaleLimit); err != nil {
+			fail(c, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 	if err := s.DB.Model(&plan).Update("active", *input.Published).Error; err != nil {
 		fail(c, http.StatusInternalServerError, "更新商品状态失败")
 		return
@@ -242,6 +276,12 @@ func (s *Server) toggleStoreProduct(c *gin.Context) {
 		return
 	}
 	updatedPublished := !plan.Active
+	if updatedPublished {
+		if err := validateStoreProductInventory(true, plan.SaleLimit); err != nil {
+			fail(c, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 	if err := s.DB.Model(&plan).Update("active", updatedPublished).Error; err != nil {
 		fail(c, http.StatusInternalServerError, "切换商品状态失败")
 		return

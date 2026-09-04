@@ -10,7 +10,7 @@ export type Plan = {
   currency: string;
   price: number;
   active: boolean;
-  /** 0 means unlimited storefront sales. */
+  /** Published storefront products always have a positive finite limit. */
   saleLimit?: number;
   soldCount?: number;
   remainingQuantity?: number | null;

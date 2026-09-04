@@ -2559,6 +2559,7 @@ app.get('/api/admin/checkout/plans', async (req, res) => {
             plans: store.PLAN_NAME_MAP,
             resolved: {
                 plus: store.resolvePlanName('plus'),
+                go: store.resolvePlanName('go'),
                 pro_5x: store.resolvePlanName('pro_5x'),
                 pro_20x: store.resolvePlanName('pro_20x')
             },
@@ -2592,7 +2593,7 @@ app.post('/api/admin/checkout/generate', async (req, res) => {
 
         const planType = String(body.plan_type || 'plus').trim();
         const planNameOverride = body.plan_name ? String(body.plan_name).trim() : '';
-        const resolvedPlanName = planNameOverride || store.resolvePlanName(planType);
+        const resolvedPlanName = store.resolvePlanName(planNameOverride || planType);
         const regionCode = String(body.country || body.region || await store.getPaymentRegion()).toUpperCase();
         if (!isSupportedRegion(regionCode)) {
             return res.status(400).json({ success: false, error: `不支持的地区: ${regionCode}` });

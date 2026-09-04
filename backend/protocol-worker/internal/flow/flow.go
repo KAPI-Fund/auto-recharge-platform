@@ -68,7 +68,7 @@ func Run(opts Options) Result {
 
 	regionCode := strings.ToUpper(firstNonEmpty(store.Str(opts.Secret, "region"), opts.Config.PaymentRegion, "SG"))
 	regionCfg := region.Get(regionCode)
-	planType := firstNonEmpty(store.Str(opts.Secret, "planType"), store.Str(opts.Secret, "planId"), "plus")
+	planType := region.NormalizePlanType(firstNonEmpty(store.Str(opts.Secret, "planType"), store.Str(opts.Secret, "planId"), "plus"))
 	proxy := strings.TrimSpace(store.Str(opts.Secret, "proxy"))
 	if proxy == "" {
 		proxy = opts.Config.Proxy
