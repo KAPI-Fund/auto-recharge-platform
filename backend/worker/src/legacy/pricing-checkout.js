@@ -1,46 +1,31 @@
 'use strict';
 
-const { getRegionConfig } = require('./region-config');
+const {
+    getRegionConfig,
+    REGION_CONFIG,
+    REGION_CURRENCY_HINTS,
+    REGION_PRICE_PATTERNS,
+    REGION_WRONG_CURRENCY,
+    getRegionUiLabels
+} = require('./region-config');
 const { assertChatGptLoggedIn } = require('./session-auth');
 const { clearHumanVerification } = require('./human-verification');
 
 const PRICING_URL = 'https://chatgpt.com/#pricing';
 
-const REGION_UI_LABELS = {
-    PH: ['菲律宾', 'Philippines', 'Pilipinas'],
-    US: ['美国', 'United States'],
-    SG: ['新加坡', 'Singapore'],
-    MY: ['马来西亚', 'Malaysia']
-};
+// 所有地区标签、币种和价格检测均来自 region-config.js，避免浏览器流程维护第二套配置。
+const REGION_UI_LABELS = Object.fromEntries(
+    Object.keys(REGION_CONFIG).map((code) => [code, getRegionUiLabels(code)])
+);
 
-const REGION_CURRENCY_HINTS = {
-    PH: ['₱'],
-    US: ['$20', '$ 20'],
-    SG: ['S$', 'SGD'],
-    MY: ['RM', 'MYR']
-};
-
-const REGION_PRICE_PATTERNS = {
-    PH: [/₱\s*[\d,.]+/, /[\d,.]+\s*₱/],
-    US: [/\$\s*20(?:\.00)?/, /USD\s*20/i, /\$\s*[\d,.]+(?:\s*\/)?\s*(?:month|mo)/i],
-    SG: [/S\$\s*[\d,.]+/, /[\d,.]+\s*SGD/i],
-    MY: [/RM\s*[\d,.]+/, /[\d,.]+\s*MYR/i]
-};
-
-const REGION_WRONG_CURRENCY = {
-    PH: [/£\s*[\d,.]+/, /[\d,.]+\s*£/, /\bGBP\b/i, /United Kingdom/i, /Great Britain/i, /€\s*[\d,.]+/, /[\d,.]+\s*€/, /\bEUR\b/i],
-    US: [/£\s*[\d,.]+/, /₱\s*[\d,.]+/, /\bGBP\b/i, /\bPHP\b/i, /S\$\s*[\d,.]+/, /RM\s*[\d,.]+/],
-    SG: [/£\s*[\d,.]+/, /₱\s*[\d,.]+/, /\$\s*20(?:\.00)?\s*(?:USD|\/)/i, /RM\s*[\d,.]+/],
-    MY: [/£\s*[\d,.]+/, /₱\s*[\d,.]+/, /S\$\s*[\d,.]+/, /\$\s*20(?:\.00)?/]
-};
-
-const REGION_CURRENT_COUNTRY_HINTS = {
-    IN: [/India|印度/i],
-    PH: [/菲律宾|Philippines|Pilipinas/i],
-    US: [/United States|美国(?!地区)/i],
-    SG: [/Singapore|新加坡/i],
-    MY: [/Malaysia|马来西亚/i]
-};
+// 已通过真实 ChatGPT 定价弹窗记录的触发器；后面的 selector 是兼容旧版/不同渲染结构的降级路径。
+const COUNTRY_SELECTOR_TRIGGER_SELECTORS = [
+    '[data-testid="country-selector-in-pricing-modal"] button[role="combobox"]',
+    '[data-testid="country-selector-in-pricing-modal"] [role="combobox"]',
+    'button[aria-haspopup="listbox"]',
+    'button[role="combobox"]',
+    '[role="combobox"]'
+];
 
 const SKIP_REGION_BUTTON_TEXT = /^(Upgrade|Personal|Business|Free|Plus|Pro|Subscribe|Close|Your current plan|升级|订阅|关闭)$/i;
 
@@ -57,7 +42,16 @@ function normalizeOptionText(text) {
 
 function matchesCountryLabel(text, labels) {
     const normalized = normalizeOptionText(text).toLowerCase();
-    return labels.some((label) => normalized === String(label).toLowerCase());
+    return labels
+        .map((label) => normalizeOptionText(label).toLowerCase())
+        .filter(Boolean)
+        .sort((a, b) => b.length - a.length)
+        .some((label) => {
+            if (normalized === label) return true;
+            if (!normalized.endsWith(label)) return false;
+            const prefix = normalized.slice(0, -label.length);
+            return !/[a-z0-9]$/i.test(prefix);
+        });
 }
 
 async function isBusinessTabActive(page) {
@@ -186,33 +180,40 @@ async function scrollPricingSurface(page) {
 async function pageShowsTargetRegionPricing(page, regionCode) {
     const code = String(regionCode || 'PH').toUpperCase();
     const text = await readPricingSurfaceText(page);
+    const selectedCountry = await readSelectedCountryLabel(page);
+    return isTargetRegionPricingText(text, code, selectedCountry);
+}
+
+function isTargetRegionPricingText(text, regionCode, selectedCountry) {
+    const code = String(regionCode || 'PH').toUpperCase();
+    const normalizedText = String(text || '');
     const positive = REGION_PRICE_PATTERNS[code] || [];
     const negative = REGION_WRONG_CURRENCY[code] || [];
-    const countryHints = REGION_CURRENT_COUNTRY_HINTS[code] || [];
-
-    const hasPositivePrice = positive.some((pattern) => pattern.test(text));
-    const hasWrongCurrency = negative.some((pattern) => pattern.test(text));
-    const hasCountryLabel = countryHints.some((pattern) => pattern.test(text));
+    const hasPositivePrice = positive.some((pattern) => pattern.test(normalizedText));
+    const hasWrongCurrency = negative.some((pattern) => pattern.test(normalizedText));
+    const hasSelectedTargetCountry = selectedCountry && matchesCountryLabel(selectedCountry, REGION_UI_LABELS[code] || []);
 
     if (hasWrongCurrency) {
+        return false;
+    }
+    // A currency symbol is not sufficient: special offers can render a zero
+    // price while the billing-country selector is still on the old country.
+    // Never allow the caller to click an upgrade button without confirming the
+    // actual selected billing country.
+    if (!hasSelectedTargetCountry) {
         return false;
     }
     if (hasPositivePrice) {
         return true;
     }
-    if (hasCountryLabel && !hasWrongCurrency) {
-        const looseHints = REGION_CURRENCY_HINTS[code] || [];
-        if (looseHints.some((hint) => text.includes(hint))) {
-            return true;
-        }
-    }
-    return false;
+    const looseHints = REGION_CURRENCY_HINTS[code] || [];
+    return looseHints.some((hint) => normalizedText.includes(hint));
 }
 
-const ALL_COUNTRY_NAME_PATTERN = /^(United Kingdom|Philippines|United States|Singapore|Malaysia|Afghanistan|Algeria|Andorra|Albania|Australia|Canada|Japan|China|菲律宾)$/i;
+const ALL_COUNTRY_NAME_PATTERN = /^(United Kingdom|Philippines|United States|United States of America|India|Singapore|Malaysia|Afghanistan|Algeria|Andorra|Albania|Australia|Canada|Japan|China|英国|菲律宾|美国|印度|新加坡|马来西亚)$/i;
 
 async function isRegionMenuOpen(page) {
-    const viewport = page.locator('[data-radix-scroll-area-viewport]').last();
+    const viewport = page.locator('[data-radix-scroll-area-viewport], [data-radix-select-viewport], [role="listbox"]').last();
     if (await viewport.isVisible({ timeout: 500 }).catch(() => false)) {
         return true;
     }
@@ -240,42 +241,68 @@ async function openRegionPicker(page) {
     const surface = await getPricingSurface(page);
     await scrollPricingSurface(page);
 
+    // The first selectors are recorded from the real ChatGPT pricing modal.
+    // Search both the pricing surface and the document because the modal
+    // footer can be portaled outside the dialog.  Do not click an unrelated
+    // combobox when a recorded selector exists but is hidden: that can select
+    // an address/payment control and falsely advance the flow.
+    const recordedTriggers = [
+        ...COUNTRY_SELECTOR_TRIGGER_SELECTORS.flatMap((selector) => [
+            surface.locator(selector).last(),
+            page.locator(selector).last()
+        ])
+    ];
+    let recordedSelectorFound = false;
+
+    const tryTriggers = async (triggers) => {
+        for (const trigger of triggers) {
+            try {
+                if ((await trigger.count().catch(() => 0)) > 0) {
+                    recordedSelectorFound = true;
+                }
+                if (!(await trigger.isVisible({ timeout: 1200 }).catch(() => false))) {
+                    continue;
+                }
+                const inListbox = await trigger.evaluate((node) => Boolean(node.closest('[role="listbox"]'))).catch(() => false);
+                if (inListbox) {
+                    continue;
+                }
+                const text = normalizeOptionText(await trigger.innerText().catch(() => ''));
+                if (!text || SKIP_REGION_BUTTON_TEXT.test(text)) {
+                    continue;
+                }
+                await trigger.scrollIntoViewIfNeeded().catch(() => {});
+                await trigger.click({ timeout: 8000 });
+                await page.waitForTimeout(900);
+                if (await isRegionMenuOpen(page)) {
+                    console.log(`[Info] 已打开地区选择器 (${text.slice(0, 40)})`);
+                    return true;
+                }
+            } catch (_) { /* try next */ }
+        }
+        return false;
+    };
+
+    if (await tryTriggers(recordedTriggers)) {
+        return true;
+    }
+
+    if (recordedSelectorFound) {
+        console.warn('[Warn] 已找到真实记录的国家选择器，但当前不可见或不可交互，拒绝使用未知控件替代');
+        return false;
+    }
+
     const triggerCandidates = [
-        surface.locator('button[aria-haspopup="listbox"]').last(),
-        surface.locator('button[aria-haspopup="listbox"]').first(),
         surface.locator('button[aria-haspopup="menu"]').last(),
         surface.locator('button[aria-expanded]').filter({ hasText: ALL_COUNTRY_NAME_PATTERN }).last(),
         surface.locator('[role="dialog"] button').filter({ hasText: ALL_COUNTRY_NAME_PATTERN }).last()
     ];
 
-    for (const trigger of triggerCandidates) {
-        try {
-            if (!(await trigger.isVisible({ timeout: 1200 }).catch(() => false))) {
-                continue;
-            }
-            const inListbox = await trigger.evaluate((node) => Boolean(node.closest('[role="listbox"]'))).catch(() => false);
-            if (inListbox) {
-                continue;
-            }
-            const text = normalizeOptionText(await trigger.innerText().catch(() => ''));
-            if (!text || SKIP_REGION_BUTTON_TEXT.test(text)) {
-                continue;
-            }
-            await trigger.scrollIntoViewIfNeeded().catch(() => {});
-            await trigger.click({ timeout: 8000 });
-            await page.waitForTimeout(900);
-            if (await isRegionMenuOpen(page)) {
-                console.log(`[Info] 已打开地区选择器 (${text.slice(0, 40)})`);
-                return true;
-            }
-        } catch (_) { /* try next */ }
-    }
-
-    return false;
+    return tryTriggers(triggerCandidates);
 }
 
 async function getCountryScrollViewport(page) {
-    const viewport = page.locator('[data-radix-scroll-area-viewport]').last();
+    const viewport = page.locator('[data-radix-scroll-area-viewport], [data-radix-select-viewport], [role="listbox"]').last();
     if (await viewport.isVisible({ timeout: 1000 }).catch(() => false)) {
         return viewport;
     }
@@ -499,11 +526,36 @@ async function tryKeyboardCountryFilter(page, label) {
 
 async function readSelectedCountryLabel(page) {
     const surface = await getPricingSurface(page);
-    const trigger = surface.locator('button').filter({
-        hasText: /Philippines|United Kingdom|Algeria|United States|Singapore|Malaysia|Afghanistan|菲律宾/i
-    }).last();
-    if (await trigger.isVisible({ timeout: 1000 }).catch(() => false)) {
-        return normalizeOptionText(await trigger.innerText().catch(() => ''));
+    const candidates = [
+        ...COUNTRY_SELECTOR_TRIGGER_SELECTORS.map((selector) => surface.locator(selector)),
+        surface.locator('button[aria-haspopup="listbox"]'),
+        surface.locator('button[aria-haspopup="menu"]'),
+        surface.locator('button[aria-expanded]'),
+        surface.locator('[role="combobox"]'),
+        surface.locator('[data-testid*="country" i], [aria-label*="country" i], [aria-label*="billing" i]')
+    ];
+    const labels = Object.values(REGION_UI_LABELS).flat();
+
+    for (const locator of candidates) {
+        const count = await locator.count().catch(() => 0);
+        for (let index = 0; index < count; index += 1) {
+            const candidate = locator.nth(index);
+            if (!(await candidate.isVisible({ timeout: 500 }).catch(() => false))) {
+                continue;
+            }
+            const inListbox = await candidate.evaluate((node) => Boolean(node.closest('[role="listbox"], [role="menu"]'))).catch(() => false);
+            if (inListbox) {
+                continue;
+            }
+            const text = normalizeOptionText([
+                await candidate.innerText().catch(() => ''),
+                await candidate.getAttribute('aria-label').catch(() => '')
+            ].filter(Boolean).join(' '));
+            const matched = labels.find((label) => matchesCountryLabel(text, [label]));
+            if (matched) {
+                return matched;
+            }
+        }
     }
     return '';
 }
@@ -513,7 +565,11 @@ async function selectRegionOption(page, regionCode) {
     const labels = REGION_UI_LABELS[code] || [];
     const preferredLabels = labels.filter((label) => label.length > 2);
 
-    const search = page.locator('input[type="search"], input[placeholder*="Search" i], input[placeholder*="搜索" i]').first();
+    const search = page.locator(
+        '[role="listbox"] input[type="search"], [role="listbox"] input[placeholder*="Search" i], [role="listbox"] input[placeholder*="搜索" i], ' +
+        '[data-radix-popper-content-wrapper] input[type="search"], input[placeholder*="Search countries" i], ' +
+        'input[placeholder*="Search" i], input[placeholder*="搜索" i]'
+    ).first();
     if (await search.isVisible({ timeout: 1500 }).catch(() => false)) {
         for (const label of preferredLabels) {
             await search.fill('').catch(() => {});
@@ -548,7 +604,8 @@ async function verifySelectedCountry(page, labels) {
         console.warn(`[Warn] 地区选择校验失败，当前显示: ${selected}，期望: ${labels.join(' / ')}`);
         return false;
     }
-    return true;
+    console.warn(`[Warn] 无法读取定价页当前选中的账单地区，期望: ${labels.join(' / ')}`);
+    return false;
 }
 
 /** @deprecated 使用 pageShowsTargetRegionPricing */
@@ -578,6 +635,9 @@ async function waitForPricingPage(page, timeout = 60000) {
 async function selectPricingRegion(page, regionCode) {
     const code = String(regionCode || 'PH').toUpperCase();
     const regionConfig = getRegionConfig(code);
+    if (!regionConfig || !REGION_UI_LABELS[code]) {
+        throw new Error(`不支持的定价页地区 ${code}`);
+    }
     console.log(`🌏 [步骤] 正在选择账单地区: ${regionConfig?.label || code}...`);
 
     if (await pageShowsTargetRegionPricing(page, code)) {
@@ -628,7 +688,8 @@ async function selectPricingRegion(page, regionCode) {
     }
 
     const finalText = (await readPricingSurfaceText(page)).replace(/\s+/g, ' ').slice(0, 160);
-    throw new Error(`无法将定价页切换到目标地区 ${code}（${regionConfig?.label || code}），请检查后台支付地区设置。当前页面: ${finalText}`);
+    const finalSelectedCountry = await readSelectedCountryLabel(page);
+    throw new Error(`无法将定价页切换到目标地区 ${code}（${regionConfig?.label || code}），请检查后台支付地区设置。当前选中地区: ${finalSelectedCountry || '(无法读取)'}；当前页面: ${finalText}`);
 }
 
 /**
@@ -758,6 +819,12 @@ async function openPricingCheckout(page, { region, planType }) {
 
 module.exports = {
     PRICING_URL,
+    COUNTRY_SELECTOR_TRIGGER_SELECTORS,
+    REGION_UI_LABELS,
+    REGION_CURRENCY_HINTS,
+    REGION_PRICE_PATTERNS,
+    REGION_WRONG_CURRENCY,
+    isTargetRegionPricingText,
     openPricingCheckout,
     waitForPricingPage,
     selectPricingRegion,
