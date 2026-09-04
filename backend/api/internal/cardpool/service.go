@@ -165,6 +165,22 @@ func (s *Service) loadPool(tx *gorm.DB, poolID string) (models.CardPool, error) 
 	return pool, nil
 }
 
+// ResolvePool returns the same runtime-effective pool definition used by
+// card allocation. In particular, the configured default pool may receive
+// its routing strategy, default provider, provider enable switches, and card
+// creation mode from AppConfig rather than from the persisted CardPool row.
+// Keeping this lookup on the card-pool service prevents request admission
+// checks from drifting away from the Worker allocation path.
+func (s *Service) ResolvePool(ctx context.Context, poolID string) (models.CardPool, error) {
+	if s == nil || s.DB == nil {
+		return models.CardPool{}, errors.New("card pool database is unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return s.loadPool(s.DB.WithContext(ctx), poolID)
+}
+
 func providerEnabledConfigKey(provider string) string {
 	return "card_provider_" + strings.ToLower(strings.TrimSpace(provider)) + "_enabled"
 }

@@ -239,7 +239,7 @@ func (s *Server) createTask(c *gin.Context) {
 			return
 		}
 	}
-	if !s.guardOrAbort(c, code, mode, c.ClientIP(), subscriptionEmailFromRaw(sessionRaw, sessionToken)) {
+	if !s.guardOrAbortForPool(c, code, mode, c.ClientIP(), strings.TrimSpace(input.PoolID), subscriptionEmailFromRaw(sessionRaw, sessionToken)) {
 		return
 	}
 	ciphertext, err := security.Encrypt(sessionRaw, s.Cfg.SessionEncryptionKey)
