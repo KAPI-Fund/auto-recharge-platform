@@ -378,10 +378,133 @@ async function assertCheckoutPageReady(page) {
 }
 
 /**
+ * 打开已创建的 Checkout URL，最多重试 openAttempts 次；每次记录 console/网络摘要。
+ */
+async function openCheckoutUrlWithRetries(page, url, {
+    openAttempts = 3,
+    sessionId = null
+} = {}) {
+    const { attachPageDebugCapture, dumpPageDebugSnapshot } = require('./page-debug');
+    const { hasVisibleLoginChrome, isCheckoutLoginGate, buildSessionNotLoggedInError } = require('./auth-page-detect');
+    const { clearHumanVerification, buildCaptchaRequiredError, isCheckoutPaymentReady } = require('./human-verification');
+    const { assertChatGptLoggedIn } = require('./session-auth');
+
+    const maxAttempts = Math.max(1, Math.min(5, Number(openAttempts) || 3));
+    const readyWaitMs = Number(process.env.CHECKOUT_READY_WAIT_MS || 60000);
+    const captchaWaitMs = Number(process.env.CAPTCHA_CLEAR_TIMEOUT_MS || 120000);
+    const debug = attachPageDebugCapture(page, { label: 'checkout', force: true });
+
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const phase = `checkout-open-${attempt}`;
+        console.log(`🔗 [步骤] 打开支付链接 (${attempt}/${maxAttempts}): ${String(url).slice(0, 120)}...`);
+        debug.reset(`attempt_${attempt}`);
+
+        try {
+            const gotoResult = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 }).catch((error) => {
+                console.error(`[Checkout] 第 ${attempt} 次 page.goto 失败: ${error.message}`);
+                return null;
+            });
+            if (gotoResult) {
+                console.log(`[BrowserDebug][nav] attempt=${attempt} status=${gotoResult.status()} url=${String(gotoResult.url() || '').slice(0, 140)}`);
+            } else {
+                await dumpPageDebugSnapshot(page, `${phase}_goto_failed`);
+                debug.summarize(`${phase}_goto_failed`);
+                lastError = new Error(`打开支付链接失败 (goto, 第 ${attempt}/${maxAttempts} 次)`);
+                if (attempt < maxAttempts) {
+                    console.warn(`[Checkout] 第 ${attempt} 次打开失败，${2 * attempt}s 后重试…`);
+                    await page.waitForTimeout(2000 * attempt);
+                    continue;
+                }
+                break;
+            }
+
+            await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+            await page.waitForTimeout(1500);
+            await dumpPageDebugSnapshot(page, `${phase}_after_goto`);
+
+            if (await isCheckoutLoginGate(page) || await hasVisibleLoginChrome(page)) {
+                const title = await page.title().catch(() => '');
+                console.error(`[Checkout] 第 ${attempt} 次打开后仍为未登录 UI url=${page.url().slice(0, 100)} title=${title}`);
+                await dumpPageDebugSnapshot(page, `${phase}_login_gate`);
+                debug.summarize(`${phase}_login_gate`);
+                // 登录态问题重试意义不大
+                throw new Error(buildSessionNotLoggedInError('Checkout 支付页'));
+            }
+
+            // 表单若已就绪，跳过漫长 captcha 等待
+            if (await isCheckoutPaymentReady(page)) {
+                const currentUrl = await assertCheckoutPageReady(page);
+                await assertChatGptLoggedIn(page, 'Checkout');
+                console.log(`✅ [步骤] Checkout 页面已打开 (第 ${attempt} 次): ${currentUrl.slice(0, 100)}...`);
+                debug.summarize(`${phase}_ready_fast`);
+                return { checkoutUrl: currentUrl, sessionId };
+            }
+
+            const captchaResult = await clearHumanVerification(page, {
+                phase,
+                maxWaitMs: Math.min(captchaWaitMs, attempt === 1 ? captchaWaitMs : 60000),
+                maxBypassRounds: attempt === 1 ? 6 : 3,
+                requireCheckoutReady: true,
+                checkoutReadyWaitMs: attempt === 1 ? readyWaitMs : Math.min(readyWaitMs, 45000)
+            });
+
+            if (!captchaResult.cleared) {
+                await dumpPageDebugSnapshot(
+                    page,
+                    captchaResult.checkoutNotReady ? `${phase}_form_not_ready` : `${phase}_captcha_blocked`
+                );
+                debug.summarize(captchaResult.checkoutNotReady ? `${phase}_form_not_ready` : `${phase}_captcha_blocked`);
+
+                if (captchaResult.sessionRequired) {
+                    throw new Error(captchaResult.message || buildSessionNotLoggedInError('Checkout 支付页'));
+                }
+                if (!captchaResult.checkoutNotReady) {
+                    // 明确 captcha 拦截：重试打开通常无用
+                    throw new Error(buildCaptchaRequiredError());
+                }
+
+                lastError = new Error(`Checkout 支付表单未能加载 (第 ${attempt}/${maxAttempts} 次)`);
+                if (attempt < maxAttempts) {
+                    console.warn(`[Checkout] 第 ${attempt} 次支付表单未就绪，准备重新打开支付链接…`);
+                    await page.waitForTimeout(2000 * attempt);
+                    continue;
+                }
+                break;
+            }
+
+            const currentUrl = await assertCheckoutPageReady(page);
+            await assertChatGptLoggedIn(page, 'Checkout');
+            console.log(`✅ [步骤] Checkout 页面已打开 (第 ${attempt} 次): ${currentUrl.slice(0, 100)}...`);
+            debug.summarize(`${phase}_success`);
+            return { checkoutUrl: currentUrl, sessionId };
+        } catch (error) {
+            lastError = error instanceof Error ? error : new Error(String(error || '打开 Checkout 失败'));
+            const msg = lastError.message || '';
+            const fatal = /登录|Session|人工验证|hCaptcha|Cloudflare|captcha/i.test(msg)
+                && !/支付表单未能加载|goto|未能加载/i.test(msg);
+            console.error(`[Checkout] 第 ${attempt}/${maxAttempts} 次打开异常: ${msg}`);
+            try {
+                await dumpPageDebugSnapshot(page, `${phase}_exception`);
+                debug.summarize(`${phase}_exception`);
+            } catch (_) { /* ignore */ }
+
+            if (fatal || attempt >= maxAttempts) {
+                throw lastError;
+            }
+            console.warn(`[Checkout] ${2 * attempt}s 后重试打开支付链接…`);
+            await page.waitForTimeout(2000 * attempt);
+        }
+    }
+
+    throw lastError || new Error('Checkout 支付表单未能加载，请检查网络或稍后重试');
+}
+
+/**
  * 通过 API 注入 billing_details 创建 Checkout，并打开 chatgpt.com/checkout
  */
 async function openApiCheckout(page, { accessToken, planType, country, currency, planNameOverride, verifyPage = true }) {
-    const { assertChatGptLoggedIn } = require('./session-auth');
     const token = String(accessToken || '').trim();
     if (!token) {
         throw new Error('缺少 AccessToken，无法调用 Checkout API');
@@ -398,52 +521,25 @@ async function openApiCheckout(page, { accessToken, planType, country, currency,
     }
 
     const url = checkout.checkoutUrl;
-    console.log(`🔗 [步骤] 正在打开支付链接: ${url.slice(0, 120)}...`);
+    console.log(`支付链接: ${String(url).slice(0, 120)}...`);
 
     if (!verifyPage) {
         console.log('✅ [步骤] Checkout Session 已创建（跳过页面打开验证）');
         return { checkoutUrl: url, sessionId: checkout.sessionId };
     }
 
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 });
-    await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
-    await page.waitForTimeout(2000);
-
-    const { hasVisibleLoginChrome, isCheckoutLoginGate, buildSessionNotLoggedInError } = require('./auth-page-detect');
-    if (await isCheckoutLoginGate(page) || await hasVisibleLoginChrome(page)) {
-        const title = await page.title().catch(() => '');
-        console.error(`[Checkout] 打开后仍为未登录 UI url=${page.url().slice(0, 100)} title=${title}`);
-        throw new Error(buildSessionNotLoggedInError('Checkout 支付页'));
-    }
-
-    const { clearHumanVerification, buildCaptchaRequiredError } = require('./human-verification');
-    const captchaResult = await clearHumanVerification(page, {
-        phase: 'checkout-open',
-        maxWaitMs: Number(process.env.CAPTCHA_CLEAR_TIMEOUT_MS || 120000),
-        maxBypassRounds: 6,
-        requireCheckoutReady: true,
-        checkoutReadyWaitMs: Number(process.env.CHECKOUT_READY_WAIT_MS || 60000)
+    const openAttempts = Math.max(1, Math.min(5, Number(process.env.CHECKOUT_OPEN_MAX_ATTEMPTS || 3) || 3));
+    return openCheckoutUrlWithRetries(page, url, {
+        openAttempts,
+        sessionId: checkout.sessionId
     });
-    if (!captchaResult.cleared) {
-        const err = captchaResult.sessionRequired
-            ? (captchaResult.message || buildSessionNotLoggedInError('Checkout 支付页'))
-            : captchaResult.checkoutNotReady
-                ? 'Checkout 支付表单未能加载，请检查网络或稍后重试'
-                : buildCaptchaRequiredError();
-        throw new Error(err);
-    }
-
-    const currentUrl = await assertCheckoutPageReady(page);
-
-    await assertChatGptLoggedIn(page, 'Checkout');
-    console.log(`✅ [步骤] Checkout 页面已打开: ${currentUrl.slice(0, 100)}...`);
-    return { checkoutUrl: currentUrl, sessionId: checkout.sessionId };
 }
 
 module.exports = ChatGPTService;
 module.exports.ChatGPTService = ChatGPTService;
 module.exports.activateSubscription = activateSubscription;
 module.exports.openApiCheckout = openApiCheckout;
+module.exports.openCheckoutUrlWithRetries = openCheckoutUrlWithRetries;
 module.exports.createHostedCheckoutLink = createHostedCheckoutLink;
 module.exports.buildCheckoutPayload = buildCheckoutPayload;
 module.exports.formatApiErrorDetail = formatApiErrorDetail;

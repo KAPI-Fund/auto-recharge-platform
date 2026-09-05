@@ -413,6 +413,7 @@ export class RechargeWorker {
           ? ["false", "0", "no"].includes(String(persisted.browserHeadless).trim().toLowerCase())
           : this.config.legacyHeadful,
         runtimeDir: persisted.runtimeDir || this.config.runtimeDir,
+        checkoutMode: persisted.checkoutMode || this.config.checkoutMode || "api",
         hcaptchaSolverEnabled: persisted.hcaptchaSolverEnabled !== undefined ? persisted.hcaptchaSolverEnabled !== "0" : this.config.hcaptchaSolverEnabled,
         hcaptchaVlmApiKey: persisted.hcaptchaVlmApiKey || this.config.hcaptchaVlmApiKey,
         hcaptchaVlmBaseUrl: persisted.hcaptchaVlmBaseUrl || this.config.hcaptchaVlmBaseUrl,

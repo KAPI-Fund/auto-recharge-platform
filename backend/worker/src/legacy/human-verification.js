@@ -1210,6 +1210,10 @@ async function clearHumanVerification(page, options = {}) {
             await page.waitForTimeout(1500);
         }
         captchaLog(phase, '支付表单长时间未出现（非验证拦截）', 'error');
+        try {
+            const { dumpPageDebugSnapshot } = require('./page-debug');
+            await dumpPageDebugSnapshot(page, `${phase}_form_timeout`);
+        } catch (_) { /* ignore */ }
         return { cleared: false, checkoutNotReady: true, captchaRequired: false };
     }
 

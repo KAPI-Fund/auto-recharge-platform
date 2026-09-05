@@ -210,6 +210,7 @@ const executionConfigKeys = [
   "recharge_queued_timeout_seconds",
   "recharge_task_lease_timeout_seconds",
   "maintenance_mode",
+  "checkout_mode",
 ] as const;
 
 const providerConfigKeys = [
@@ -1285,7 +1286,7 @@ export function AdminConsoleView({ section }: { section: AdminSection }) {
     proxies: "管理 Playwright 自动化使用的代理。一行一条 URL，支持 http(s) / socks5；用户名可含 {session} 占位符走 sticky session。每次任务从「启用」的代理中随机抽取。",
     browser_pool: "常驻 Chromium 进程与本地 Profile 缓存；任务通过 CDP 接入，每单独立 Context。页面每 2 秒自动刷新。",
     tax_addresses: "管理美国免税州账单地址池（Oregon / Delaware / Montana / New Hampshire / Alaska）。支付时随机选取；州名使用完整英文（如 Oregon）以匹配结账下拉框。",
-    checkout_debug: "启动 Playwright 浏览器，注入 Session 后调用 Checkout API 生成支付链接（不执行填卡/订阅，正式开通请走前台 CDK）",
+    checkout_debug: "启动 Playwright 浏览器，注入 Session 后按系统配置的 Checkout 建单方式打开支付页（不执行填卡/订阅，正式开通请走前台 CDK）",
     cards: "管理 Stripe 支付使用的银行卡资源（通过 API 导入与维护）",
     cdks: "生成并管理用于前台兑换的激活码",
     store_products: "发布平台内购商品，调试模式下支付成功后立即发放 CDK。",
@@ -1916,6 +1917,10 @@ function ConfigPanel({
     try {
       const payload: JsonMap = {};
       for (const key of keys) {
+        if (key === "checkout_mode") {
+          payload[key] = field("checkout_mode", "api");
+          continue;
+        }
         if (Object.prototype.hasOwnProperty.call(settings, key)) {
           payload[key] = settings[key];
         }
@@ -2161,6 +2166,21 @@ function ConfigPanel({
             Worker 租约超时（秒）
             <input type="number" min={5} max={3600} value={field("recharge_task_lease_timeout_seconds", "60")} onChange={(event) => update("recharge_task_lease_timeout_seconds", event.target.value)} className="asset-input" placeholder="60" />
             <p className="config-description config-field-note">Worker 心跳超过该时间未更新，任务会自动回收，旧 Worker 不能继续写入状态。</p>
+          </label>
+          <label className="config-field-spaced config-field-large">
+            Checkout 建单方式
+            <select
+              value={field("checkout_mode", "api")}
+              onChange={(event) => update("checkout_mode", event.target.value)}
+              className="asset-input"
+            >
+              <option value="api">API 建单（生成支付链接后打开）</option>
+              <option value="ui">定价页 UI（Playwright 点升级）</option>
+              <option value="api_then_ui">先 API，失败再回退定价页 UI</option>
+            </select>
+            <p className="config-description config-field-note">
+              影响正式开通与支付链接调试。API 建单快但支付页有时加载失败；定价页 UI 更接近真人升级路径。保存后下一单生效，无需重启。
+            </p>
           </label>
           <div className="config-toggle-block">
             <ConfigToggle label="维护模式" checked={bool(settings, "maintenance_mode")} onChange={(checked) => update("maintenance_mode", checked ? "1" : "0")} />

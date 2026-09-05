@@ -3127,11 +3127,12 @@ function spawnCheckoutDebugWorker({ task, token, sessionRaw, planType, region, p
             const proxy = await store.getActiveProxy();
             const hcaptchaCfg = await store.getHcaptchaConfig();
             const { env: hcaptchaEnv } = buildHcaptchaEnvFromConfig(hcaptchaCfg);
+            const checkoutMode = String(await store.getAppConfigValue('checkout_mode', process.env.CHECKOUT_MODE || 'api')).trim() || 'api';
             const runtimeEnv = {
                 ...process.env,
                 ...hcaptchaEnv,
                 CHECKOUT_DEBUG_ONLY: '1',
-                CHECKOUT_MODE: 'api',
+                CHECKOUT_MODE: checkoutMode,
                 CHATGPT_TOKEN: token,
                 CHATGPT_SESSION_JSON: String(sessionRaw || '').startsWith('{') ? sessionRaw : '',
                 CDK_PLAN_TYPE: planType,
@@ -3488,6 +3489,7 @@ function spawnActivationWorker({ task, token, sessionRaw, cdk, cdkDetails, clien
                 const proxy = await store.getActiveProxy();
                 const hcaptchaCfg = await store.getHcaptchaConfig();
                 const { env: hcaptchaEnv } = buildHcaptchaEnvFromConfig(hcaptchaCfg);
+                const checkoutMode = String(await store.getAppConfigValue('checkout_mode', process.env.CHECKOUT_MODE || 'api')).trim() || 'api';
                 const runtimeEnv = {
                     ...process.env,
                     ...hcaptchaEnv,
@@ -3497,6 +3499,7 @@ function spawnActivationWorker({ task, token, sessionRaw, cdk, cdkDetails, clien
                     CDK_CODE: cdk,
                     CDK_PLAN_TYPE: cdkDetails.plan_type || 'plus',
                     PAYMENT_REGION_OVERRIDE: taskBilling.country,
+                    CHECKOUT_MODE: checkoutMode,
                     PROXY: proxy
                 };
 

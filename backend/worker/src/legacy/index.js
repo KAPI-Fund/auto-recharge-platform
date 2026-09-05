@@ -7,6 +7,7 @@ const { installChatGptSession, bootstrapChatGptSession } = require('./session-au
 const { connectTaskBrowser, applyCdpEnv, closeTaskBrowser } = require('./browser-runtime');
 const { preparePlaywrightProxy } = require('./playwright-proxy');
 const { normalizeCheckoutMode, shouldFallbackToUi, formatCheckoutApiFailure } = require('./checkout-mode');
+const { attachPageDebugCapture, dumpPageDebugSnapshot } = require('./page-debug');
 const fs = require('fs');
 const path = require('path');
 
@@ -519,17 +520,19 @@ async function run() {
         page.on('close', () => {
             console.warn(`⚠️ [系统] 当前页面已关闭，关闭前最后 URL: ${page.url()}`);
         });
+        attachPageDebugCapture(page, { label: 'task' });
 
         const loginInfo = await bootstrapChatGptSession(page, sessionRaw, { sessionData, cookieVerified });
         if (loginInfo.email && !email) {
             console.log(`[Info] 账号邮箱: ${loginInfo.email}`);
         }
 
-        // --- Phase 2: API 创建 Checkout（注入账单地区），失败时回退 UI 定价页 ---
+        // --- Phase 2: 按 CHECKOUT_MODE 建单（api / ui / api_then_ui）---
         const checkoutMode = normalizeCheckoutMode(process.env.CHECKOUT_MODE || 'api');
         let checkoutOpened = false;
         let checkoutResult = null;
         const planNameOverride = String(CONFIG.planNameOverride || '').trim() || undefined;
+        console.log(`[Checkout] 建单方式: ${checkoutMode}${debugOnly ? '（调试）' : ''}`);
 
         if (checkoutMode !== 'ui') {
             try {
@@ -545,7 +548,7 @@ async function run() {
             } catch (apiError) {
                 const checkoutFailure = new Error(formatCheckoutApiFailure(apiError));
                 console.error(`[Checkout] ${checkoutFailure.message}`);
-                if (shouldFallbackToUi(checkoutMode) && !debugOnly) {
+                if (shouldFallbackToUi(checkoutMode)) {
                     console.log('[Info] 正在回退到 UI 定价页流程...');
                 } else {
                     throw checkoutFailure;
@@ -554,15 +557,13 @@ async function run() {
         }
 
         if (!checkoutOpened) {
-            if (debugOnly) {
-                throw new Error('API Checkout 失败，调试模式不启用 UI 定价页');
-            }
             console.log('🧭 [步骤] 正在打开定价页并选择升级套餐...');
             await openPricingCheckout(page, {
                 region: billingCountry,
                 planType
             });
             checkoutResult = { checkoutUrl: page.url() };
+            checkoutOpened = true;
         }
 
         if (debugOnly) {
@@ -605,6 +606,11 @@ async function run() {
 
     } catch (e) {
         console.error("❌ [运行时错误]:", e.message);
+        try {
+            if (page && !page.isClosed()) {
+                await dumpPageDebugSnapshot(page, e.message || 'runtime_error');
+            }
+        } catch (_) { /* ignore debug dump errors */ }
         try {
             const errorShot = await captureDebugScreenshot(context, page, 'error');
             if (errorShot) {

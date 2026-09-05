@@ -161,6 +161,15 @@ func (s *Server) legacySaveConfig(c *gin.Context) {
 				return
 			}
 			value = strconv.Itoa(parsed)
+		case "checkout_mode":
+			mode := strings.ToLower(strings.TrimSpace(value))
+			switch mode {
+			case "api", "ui", "api_then_ui":
+				value = mode
+			default:
+				c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "checkout_mode 必须是 api / ui / api_then_ui"})
+				return
+			}
 		case "maintenance_mode", "maintenance_mode_drain", "browser_pool_enabled",
 			"card_provider_local_text_enabled", "card_provider_airwallex_enabled",
 			"card_provider_stripe_issuing_enabled", "card_provider_photonpay_enabled",

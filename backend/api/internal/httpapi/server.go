@@ -700,6 +700,9 @@ func (s *Server) getConfig(c *gin.Context) {
 	result["publicBaseURL"] = firstNonEmpty(s.configValue("public_base_url", ""), s.Cfg.PublicBaseURL)
 	result["rechargeQueuedTimeoutSeconds"] = strconv.Itoa(int(s.taskQueuedTimeout() / time.Second))
 	result["rechargeTaskLeaseTimeoutSeconds"] = strconv.Itoa(int(s.taskLeaseTimeout() / time.Second))
+	if strings.TrimSpace(result["checkout_mode"]) == "" {
+		result["checkout_mode"] = "api"
+	}
 	for key, value := range s.emailConfigValues() {
 		result[key] = value
 	}
@@ -779,6 +782,12 @@ func publicConfigValues(values []models.AppConfig) map[string]string {
 
 func (s *Server) getWorkerConfig(c *gin.Context) {
 	hcaptcha := s.hcaptchaConfig()
+	checkoutMode := strings.ToLower(strings.TrimSpace(s.configValue("checkout_mode", "api")))
+	switch checkoutMode {
+	case "api", "ui", "api_then_ui":
+	default:
+		checkoutMode = "api"
+	}
 	config := map[string]string{
 		"mode":                           s.configValue("mode", s.Cfg.DefaultRechargeMode),
 		"upstreamBaseURL":                s.configValue("upstreamBaseURL", s.Cfg.UpstreamBaseURL),
@@ -788,6 +797,7 @@ func (s *Server) getWorkerConfig(c *gin.Context) {
 		"browserHeadless":                s.configValue("browserHeadless", strconv.FormatBool(s.Cfg.BrowserHeadless)),
 		"runtimeDir":                     s.configValue("runtimeDir", s.Cfg.RuntimeDir),
 		"paymentRegion":                  s.configValue("payment_region", "PH"),
+		"checkoutMode":                   checkoutMode,
 		"hcaptchaSolverEnabled":          hcaptcha["hcaptcha_solver_enabled"],
 		"hcaptchaVlmApiKey":              hcaptcha["hcaptcha_vlm_api_key"],
 		"hcaptchaVlmBaseUrl":             hcaptcha["hcaptcha_vlm_base_url"],
