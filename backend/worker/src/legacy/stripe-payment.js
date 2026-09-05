@@ -627,6 +627,7 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
     const isCardRetry = cardAttempt > 1;
     let holderName = String(options.holderName || '').trim();
     let checkoutDue = null;
+    let paymentSubmitted = false;
 
     try {
         if (isCardRetry) {
@@ -638,7 +639,7 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
             const retryFill = await fillCardFieldsOpenAiCheckout(page, cardInfo, ELEMENT_TIMEOUT);
             if (!retryFill.ok) {
                 const screenshotPath = await saveDebugScreenshot(page, 'card_fields_not_found');
-                return { success: false, error: retryFill.error || '无法定位信用卡输入框', screenshot: screenshotPath };
+                return { success: false, error: retryFill.error || '无法定位信用卡输入框', screenshot: screenshotPath, paymentSubmitted };
             }
         } else {
         console.log('[Stripe] Step 0: 等待 Checkout 支付页就绪...');
@@ -655,14 +656,16 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
                 return {
                     success: false,
                     error: 'Checkout 支付表单未能加载',
-                    screenshot: screenshotPath
+                    screenshot: screenshotPath,
+                    paymentSubmitted
                 };
             }
             return {
                 success: false,
                 error: buildCaptchaRequiredError(),
                 screenshot: screenshotPath,
-                captchaRequired: true
+                captchaRequired: true,
+                paymentSubmitted
             };
         }
         // 多国家：可能默认 UPI/Apple Pay/本地方式，先展开 Card 再填
@@ -684,7 +687,7 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
         }
         if (!fillResult.ok) {
             const screenshotPath = await saveDebugScreenshot(page, 'card_fields_not_found');
-            return { success: false, error: fillResult.error || '无法定位信用卡输入框', screenshot: screenshotPath };
+            return { success: false, error: fillResult.error || '无法定位信用卡输入框', screenshot: screenshotPath, paymentSubmitted };
         }
 
         // 离开卡号 iframe，点击账单区确保主文档获得焦点
@@ -706,7 +709,8 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
                 return {
                     success: false,
                     error: billingResult.error || '账单地址填写失败',
-                    screenshot: screenshotPath
+                    screenshot: screenshotPath,
+                    paymentSubmitted
                 };
             }
             if (billingResult.dueAmount) {
@@ -794,6 +798,7 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
         }
 
         const payResult = await finalizeCheckoutPayment(page, holderName);
+        paymentSubmitted = payResult.paymentSubmitted === true;
         if (checkoutDue?.amount) {
             payResult.dueAmount = checkoutDue.amount;
             payResult.dueCurrency = checkoutDue.currency;
@@ -803,7 +808,7 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
     } catch (error) {
         console.error(`[Stripe] ❌ 支付流程异常: ${error.message}`);
         const screenshotPath = await saveDebugScreenshot(page, 'payment_exception');
-        return { success: false, error: error.message, screenshot: screenshotPath };
+        return { success: false, error: error.message, screenshot: screenshotPath, paymentSubmitted };
     }
 }
 
@@ -1001,44 +1006,46 @@ async function finalizeCheckoutPayment(page, holderName) {
     const submitted = await clickCheckoutSubmitButton(page);
     if (!submitted) {
         const screenshotPath = await saveDebugScreenshot(page, 'submit_not_found');
-        return { success: false, error: '无法找到提交/支付按钮', screenshot: screenshotPath };
+        return { success: false, error: '无法找到提交/支付按钮', screenshot: screenshotPath, paymentSubmitted: false };
     }
+
+    const withSubmitted = (result) => ({ ...(result || {}), paymentSubmitted: true });
 
     const postResult = await handlePostSubmitPhase(page);
     if (postResult.action === 'declined') {
-        return buildDeclinedPaymentResult(page, postResult.declineMsg, postResult.screenshot);
+        return withSubmitted(buildDeclinedPaymentResult(page, postResult.declineMsg, postResult.screenshot));
     }
     if (postResult.action === 'captcha_failed') {
-        return {
+        return withSubmitted({
             success: false,
             error: postResult.error,
             screenshot: postResult.screenshot,
             captchaRequired: true
-        };
+        });
     }
     if (postResult.action === 'success') {
         console.log('[Stripe] ✅ 支付成功！');
         const screenshotPath = await saveDebugScreenshot(page, 'payment_success');
-        return { success: true, holderName, screenshot: screenshotPath };
+        return withSubmitted({ success: true, holderName, screenshot: screenshotPath });
     }
 
     const paymentOutcome = await waitForPaymentResult(page, holderName);
     if (paymentOutcome.success) {
         console.log('[Stripe] ✅ 支付成功！');
-        return {
+        return withSubmitted({
             success: true,
             holderName: paymentOutcome.holderName,
             screenshot: paymentOutcome.screenshot
-        };
+        });
     }
     if (paymentOutcome.error && PAYMENT_DECLINE_PATTERNS.some((re) => re.test(paymentOutcome.error))) {
-        return {
+        return withSubmitted({
             ...paymentOutcome,
             declined: true,
             canRetryCard: true
-        };
+        });
     }
-    return paymentOutcome;
+    return withSubmitted(paymentOutcome);
 }
 
 /**

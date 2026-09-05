@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { settleOneTimeCard } from "../src/legacy/card-lifecycle.js";
+import { releaseCardReservation, settleOneTimeCard } from "../src/legacy/card-lifecycle.js";
 
 test("single-use settlement uses the Go closeout command once", async () => {
   const calls = [];
@@ -47,4 +47,24 @@ test("legacy fallback attempts usage and release even when failure recording fai
 
   assert.equal(result.ok, false);
   assert.deepEqual(calls, ["failure", "usage", "release"]);
+});
+
+test("automation-blocked payment releases only the reservation", async () => {
+  const calls = [];
+  const store = {
+    async releaseCardReservation(...args) {
+      calls.push(["releaseReservation", ...args]);
+      return { ok: true };
+    },
+    async settleCard() {
+      calls.push(["settle"]);
+      return { ok: true };
+    },
+  };
+
+  const result = await releaseCardReservation(store, { id: "card-1", allocationId: "allocation-1" });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.accepted, true);
+  assert.deepEqual(calls, [["releaseReservation", "card-1", "allocation-1"]]);
 });

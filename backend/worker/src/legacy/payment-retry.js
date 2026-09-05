@@ -14,7 +14,7 @@ const store = require('./mysql-store');
 const { completeStripeCardPayment, readCheckoutDueAmount, estimateTaxFreeAmount } = require('./stripe-payment');
 const { pickBillingAddressForCheckout, markAddressBound } = require('./tax-free-address');
 const { getRegionConfig } = require('./region-config');
-const { settleOneTimeCard } = require('./card-lifecycle');
+const { settleOneTimeCard, releaseCardReservation } = require('./card-lifecycle');
 
 const MAX_CARD_ATTEMPTS = Number(process.env.PAYMENT_MAX_CARD_ATTEMPTS) || 3;
 const MAX_AUTOMATION_ATTEMPTS = MAX_CARD_ATTEMPTS;
@@ -111,6 +111,14 @@ async function executePaymentWithRetry(page, options) {
         }
         return result;
     };
+
+    const releaseAttemptReservation = async (card) => {
+        const result = await releaseCardReservation(store, card);
+        if (!result.ok) {
+            progress(`卡片预留释放失败: ${result.error?.message || '未知错误'}，保留当前卡片待人工/恢复处理`);
+        }
+        return result;
+    };
     try {
         const due = await readCheckoutDueAmount(page);
         if (due?.amount) {
@@ -158,6 +166,7 @@ async function executePaymentWithRetry(page, options) {
         progress(`已预留卡片 #${cardAttempt}: ...${cardLast4}`);
 
         let cardHandled = false;
+        let paymentSubmitted = false;
 
         try {
             const paymentResult = await completeStripeCardPayment(page, cardInfo, address, {
@@ -168,6 +177,8 @@ async function executePaymentWithRetry(page, options) {
             if (paymentResult.holderName) {
                 billingHolderName = paymentResult.holderName;
             }
+
+            paymentSubmitted = paymentResult.paymentSubmitted === true;
 
             if (paymentResult.success) {
                 const resolved = await resolveBilledAmountForRecord(
@@ -218,12 +229,12 @@ async function executePaymentWithRetry(page, options) {
             }
 
             const allocationId = String(card.allocationId || card.allocation_id || '').trim();
-            const failureCode = paymentResult.declined || isPaymentDeclined(lastError)
+            const declined = paymentSubmitted && (paymentResult.declined || isPaymentDeclined(lastError));
+            const failureCode = declined
                 ? 'card_declined'
                 : paymentResult.captchaRequired
                     ? 'captcha_required'
                     : 'payment_failed';
-            const declined = paymentResult.declined || isPaymentDeclined(lastError);
             if (declined) {
                 await store.createBillingRecord({
 					card_last4: cardLast4,
@@ -269,6 +280,11 @@ async function executePaymentWithRetry(page, options) {
                 progress('检测到 Cloudflare/hCaptcha 人机验证，自动化无法可靠通过');
             }
 
+            const automationFailureCode = paymentSubmitted
+                ? 'payment_unknown'
+                : failureCode === 'captcha_required'
+                    ? 'captcha_required'
+                    : 'automation_blocked';
             await store.createBillingRecord({
 				card_last4: cardLast4,
 				payment_card_id: card.id,
@@ -283,27 +299,51 @@ async function executePaymentWithRetry(page, options) {
                 email,
                 stripe_session_id: stripeSessionId || null,
                 status: 'failed',
-                error_code: 'form_validation_failed',
+                error_code: automationFailureCode,
                 error_message: lastError
             });
 
-            // Every attempted payment consumes one attempt in the normalized
-            // card pool. This prevents a failed card from being immediately
-            // reused and leaves the exact failure category on the card/task.
-            const settlement = await settleAttempt(card, { failureCode: 'form_validation_failed', failureMessage: lastError });
-            cardHandled = settlement.accepted;
+            if (!paymentSubmitted) {
+                // No payment request was submitted. Keep the card usable and
+                // only release the allocation; do not record usage or cancel
+                // the provider card.
+                const released = await releaseAttemptReservation(card);
+                cardHandled = released.accepted;
+            } else {
+                // A click/request happened but no final success or decline was
+                // observed. Do not mark the card as failed or cancel it: the
+                // payment outcome is unknown and must remain reviewable.
+                const recorded = await store.recordCardFailure(
+                    card.id,
+                    allocationId,
+                    'payment_unknown',
+                    lastError
+                );
+                cardHandled = recorded?.ok !== false;
+            }
 
-            progress('支付自动化失败，需人工操作');
+            progress(paymentSubmitted
+                ? '支付已提交但未确认最终结果，卡片保留待核查'
+                : '支付尚未提交，已释放卡片预留');
             return {
                 success: false,
                 error: `需要人工操作：${lastError}`,
                 cardLast4,
                 manualIntervention: true,
-                screenshots
+                screenshots,
+                paymentSubmitted
             };
         } finally {
 			if (card?.id && !cardHandled) {
-				await settleAttempt(card, { failureCode: 'payment_exception', failureMessage: '支付流程异常中断' });
+				if (paymentSubmitted) {
+					try {
+						await store.recordCardFailure(card.id, allocationId, 'payment_unknown', '支付流程异常中断');
+						cardHandled = true;
+					} catch (_) { /* preserve the original payment failure */ }
+				} else {
+					const released = await releaseAttemptReservation(card);
+					cardHandled = released.accepted;
+				}
 			}
         }
     }
