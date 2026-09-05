@@ -10,18 +10,46 @@ const INTERESTING_HOST = /chatgpt\.com|openai\.com|stripe\.com|stripecdn\.com|js
 const MAX_LINE = 280;
 const attached = new WeakMap();
 
+function normalizeLogLevel(value, fallback = 'info') {
+    const raw = String(value || '').trim().toLowerCase();
+    if (raw === 'off' || raw === '0' || raw === 'false' || raw === 'no') return 'off';
+    if (raw === 'info') return 'info';
+    if (raw === 'debug' || raw === '1' || raw === 'true' || raw === 'on') return 'debug';
+    return fallback;
+}
+
+function configuredLogLevel(env = process.env) {
+    const configured = String(env.WORKER_LOG_LEVEL || '').trim();
+    if (configured) return normalizeLogLevel(configured);
+    const legacy = String(env.BROWSER_DEBUG_LOGS || '').trim();
+    if (legacy) return normalizeLogLevel(legacy);
+    return 'info';
+}
+
+function shouldLogAt(level, env = process.env) {
+    const current = configuredLogLevel(env);
+    if (current === 'off') return false;
+    return level === 'info' || current === 'debug';
+}
+
 function debugEnabled() {
-    const raw = String(process.env.BROWSER_DEBUG_LOGS || '1').trim().toLowerCase();
-    return raw !== '0' && raw !== 'false' && raw !== 'off';
+    return configuredLogLevel() !== 'off';
 }
 
 function clip(value, max = MAX_LINE) {
-    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    const text = redactSensitive(String(value || '').replace(/\s+/g, ' ').trim());
     if (text.length <= max) return text;
     return `${text.slice(0, max)}…`;
 }
 
-function debugLog(kind, message) {
+function redactSensitive(value) {
+    return String(value || '')
+        .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[redacted-email]')
+        .replace(/\b(?:\d[ -]*?){13,19}\b/g, '[redacted-number]');
+}
+
+function debugLog(kind, message, level = 'info') {
+    if (!shouldLogAt(level)) return;
     console.log(`[BrowserDebug][${kind}] ${clip(message, 500)}`);
 }
 
@@ -34,8 +62,7 @@ function shouldLogResponse(url, status) {
 function shortUrl(url) {
     try {
         const parsed = new URL(String(url || ''));
-        const path = `${parsed.pathname || ''}${parsed.search || ''}`;
-        return clip(`${parsed.host}${path}`, 160);
+        return clip(`${parsed.host}${parsed.pathname || ''}`, 160);
     } catch (_) {
         return clip(url, 160);
     }
@@ -68,7 +95,7 @@ function attachPageDebugCapture(page, options = {}) {
     if (!page || typeof page.on !== 'function') {
         return { reset() {}, summarize() {}, detach() {} };
     }
-    if (!debugEnabled() && !options.force) {
+    if (!debugEnabled()) {
         return { reset() {}, summarize() {}, detach() {} };
     }
 
@@ -115,7 +142,7 @@ function attachPageDebugCapture(page, options = {}) {
             }
             if (/stripe|checkout|payment|error|fail|blocked|csp|cors/i.test(text)) {
                 consoleBuf.push(entry);
-                debugLog('console', `${labelRef.value} ${type}: ${text}`);
+                debugLog('console', `${labelRef.value} ${type}: ${text}`, 'debug');
             }
         } catch (_) { /* ignore */ }
     };
@@ -167,7 +194,7 @@ function attachPageDebugCapture(page, options = {}) {
             if (status >= 400) stats.badResponses += 1;
             const line = `${status} ${response.request?.().method?.() || 'GET'} ${shortUrl(url)}`;
             netBuf.push({ status, url, at: Date.now() });
-            debugLog('net', `${labelRef.value} ${line}`);
+            debugLog('net', `${labelRef.value} ${line}`, status >= 400 ? 'info' : 'debug');
         } catch (_) { /* ignore */ }
     };
 
@@ -246,6 +273,7 @@ function attachPageDebugCapture(page, options = {}) {
  * 白屏/表单未就绪时导出页面快照，便于对照录像。
  */
 async function dumpPageDebugSnapshot(page, reason = '') {
+    if (!debugEnabled()) return null;
     if (!page || page.isClosed?.()) {
         debugLog('snapshot', `无法采集：页面已关闭 reason=${clip(reason, 80)}`);
         return null;
@@ -257,7 +285,7 @@ async function dumpPageDebugSnapshot(page, reason = '') {
             const text = body ? String(body.innerText || body.textContent || '') : '';
             const htmlLen = body ? String(body.innerHTML || '').length : 0;
             const iframes = Array.from(document.querySelectorAll('iframe')).map((frame) => ({
-                src: String(frame.getAttribute('src') || '').slice(0, 120),
+                src: String(frame.getAttribute('src') || ''),
                 w: frame.clientWidth || 0,
                 h: frame.clientHeight || 0
             }));
@@ -293,7 +321,7 @@ async function dumpPageDebugSnapshot(page, reason = '') {
             debugLog('snapshot', 'body 文本为空（白屏/未渲染/被遮罩）');
         }
         for (const frame of info.iframes || []) {
-            debugLog('snapshot', `iframe ${frame.w}x${frame.h} src=${clip(frame.src, 120) || '(empty)'}`);
+            debugLog('snapshot', `iframe ${frame.w}x${frame.h} src=${shortUrl(frame.src) || '(empty)'}`);
         }
         return info;
     } catch (error) {
@@ -305,5 +333,10 @@ async function dumpPageDebugSnapshot(page, reason = '') {
 module.exports = {
     attachPageDebugCapture,
     dumpPageDebugSnapshot,
-    debugEnabled
+    debugEnabled,
+    normalizeLogLevel,
+    configuredLogLevel,
+    shouldLogAt,
+    redactSensitive,
+    shortUrl
 };

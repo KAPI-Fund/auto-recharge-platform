@@ -21,6 +21,12 @@ function progressFromOutput(line, previous) {
   return previous;
 }
 
+function normalizeWorkerLogLevel(value, fallback = "info") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["off", "info", "debug"].includes(normalized)) return normalized;
+  return fallback;
+}
+
 function outputPaths(output, marker) {
   const result = new Set();
   for (const line of String(output || "").split(/\r?\n/)) {
@@ -219,6 +225,7 @@ function runLegacy({ taskId, jobKey, secret, taskContext = {}, config, workerId,
       HEADFUL: config.legacyHeadful ? "1" : "0",
       CHROMIUM_CHANNEL: config.chromiumChannel || "",
       CHECKOUT_MODE: config.checkoutMode || "api",
+      WORKER_LOG_LEVEL: normalizeWorkerLogLevel(config.workerLogLevel || "info"),
       PAYMENT_TEST_MODE: config.paymentTestMode || "",
       HCAPTCHA_SOLVER_ENABLED: config.hcaptchaSolverEnabled ? "1" : "0",
       HCAPTCHA_VLM_API_KEY: config.hcaptchaVlmApiKey || "",
@@ -414,6 +421,7 @@ export class RechargeWorker {
           : this.config.legacyHeadful,
         runtimeDir: persisted.runtimeDir || this.config.runtimeDir,
         checkoutMode: persisted.checkoutMode || this.config.checkoutMode || "api",
+        workerLogLevel: normalizeWorkerLogLevel(persisted.workerLogLevel || this.config.workerLogLevel || "info"),
         hcaptchaSolverEnabled: persisted.hcaptchaSolverEnabled !== undefined ? persisted.hcaptchaSolverEnabled !== "0" : this.config.hcaptchaSolverEnabled,
         hcaptchaVlmApiKey: persisted.hcaptchaVlmApiKey || this.config.hcaptchaVlmApiKey,
         hcaptchaVlmBaseUrl: persisted.hcaptchaVlmBaseUrl || this.config.hcaptchaVlmBaseUrl,
@@ -694,4 +702,4 @@ export class RechargeWorker {
   }
 }
 
-export { syncLegacyArtifacts };
+export { normalizeWorkerLogLevel, syncLegacyArtifacts };

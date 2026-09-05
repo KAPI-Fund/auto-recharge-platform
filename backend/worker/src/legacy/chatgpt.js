@@ -384,7 +384,7 @@ async function openCheckoutUrlWithRetries(page, url, {
     openAttempts = 3,
     sessionId = null
 } = {}) {
-    const { attachPageDebugCapture, dumpPageDebugSnapshot } = require('./page-debug');
+    const { attachPageDebugCapture, dumpPageDebugSnapshot, shouldLogAt, shortUrl } = require('./page-debug');
     const { hasVisibleLoginChrome, isCheckoutLoginGate, buildSessionNotLoggedInError } = require('./auth-page-detect');
     const { clearHumanVerification, buildCaptchaRequiredError, isCheckoutPaymentReady } = require('./human-verification');
     const { assertChatGptLoggedIn } = require('./session-auth');
@@ -392,7 +392,7 @@ async function openCheckoutUrlWithRetries(page, url, {
     const maxAttempts = Math.max(1, Math.min(5, Number(openAttempts) || 3));
     const readyWaitMs = Number(process.env.CHECKOUT_READY_WAIT_MS || 60000);
     const captchaWaitMs = Number(process.env.CAPTCHA_CLEAR_TIMEOUT_MS || 120000);
-    const debug = attachPageDebugCapture(page, { label: 'checkout', force: true });
+    const debug = attachPageDebugCapture(page, { label: 'checkout' });
 
     let lastError = null;
 
@@ -407,7 +407,9 @@ async function openCheckoutUrlWithRetries(page, url, {
                 return null;
             });
             if (gotoResult) {
-                console.log(`[BrowserDebug][nav] attempt=${attempt} status=${gotoResult.status()} url=${String(gotoResult.url() || '').slice(0, 140)}`);
+                if (shouldLogAt('info')) {
+                    console.log(`[BrowserDebug][nav] attempt=${attempt} status=${gotoResult.status()} url=${shortUrl(gotoResult.url())}`);
+                }
             } else {
                 await dumpPageDebugSnapshot(page, `${phase}_goto_failed`);
                 debug.summarize(`${phase}_goto_failed`);

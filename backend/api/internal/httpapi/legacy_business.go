@@ -120,6 +120,7 @@ func (s *Server) legacySaveConfig(c *gin.Context) {
 		"checkout_mode": true, "browser_pool_enabled": true, "browserCheckoutURL": true, "browserHeadless": true, "runtimeDir": true,
 		"pool_email_imap_host": true, "pool_email_imap_port": true, "pool_email_include_junk": true,
 		"recharge_queued_timeout_seconds": true, "recharge_task_lease_timeout_seconds": true,
+		"worker_log_level": true,
 		"store_debug_mode": true, "stripe_success_url": true, "stripe_cancel_url": true, "public_base_url": true,
 		"email_enabled": true, "email_notify_purchase": true, "email_notify_redeem": true, "email_site_name": true,
 		"email_smtp_host": true, "email_smtp_port": true, "email_smtp_username": true, "email_smtp_from": true,
@@ -170,6 +171,13 @@ func (s *Server) legacySaveConfig(c *gin.Context) {
 				c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "checkout_mode 必须是 api / ui / api_then_ui"})
 				return
 			}
+		case "worker_log_level":
+			level := normalizeWorkerLogLevel(value)
+			if level != strings.ToLower(strings.TrimSpace(value)) {
+				c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "worker_log_level 必须是 off / info / debug"})
+				return
+			}
+			value = level
 		case "maintenance_mode", "maintenance_mode_drain", "browser_pool_enabled",
 			"card_provider_local_text_enabled", "card_provider_airwallex_enabled",
 			"card_provider_stripe_issuing_enabled", "card_provider_photonpay_enabled",
@@ -337,6 +345,7 @@ func normalizeLegacyConfigInput(input map[string]any) map[string]any {
 		"emailSMTPTimeoutSeconds":              "email_smtp_timeout_seconds",
 		"rechargeQueuedTimeoutSeconds":         "recharge_queued_timeout_seconds",
 		"rechargeTaskLeaseTimeoutSeconds":      "recharge_task_lease_timeout_seconds",
+		"workerLogLevel":                       "worker_log_level",
 		"cardPoolDefaultID":                    "card_pool_default_id",
 		"cardPoolRouting":                      "card_pool_routing",
 		"cardPoolDefaultProvider":              "card_pool_default_provider",
@@ -421,6 +430,15 @@ func normalizeLegacyConfigInput(input map[string]any) map[string]any {
 		}
 	}
 	return normalized
+}
+
+func normalizeWorkerLogLevel(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "off", "info", "debug":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return "info"
+	}
 }
 
 func legacyStoreStripeConfig(input map[string]any) map[string]string {
