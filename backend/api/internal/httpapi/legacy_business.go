@@ -146,8 +146,8 @@ func (s *Server) legacySaveConfig(c *gin.Context) {
 		"dogpay_card_type": true, "dogpay_budget_id": true,
 		"dogpay_webhook_tolerance_seconds": true,
 		"kimoox_base_url":                  true, "kimoox_card_bin_ids": true, "kimoox_card_type": true,
-		"kimoox_prepaid_recharge_amount": true,
-		"kimoox_cardholder_id":           true, "kimoox_holder_id": true, "kimoox_card_group_id": true,
+		"kimoox_prepaid_amount_mode": true, "kimoox_prepaid_recharge_amount": true,
+		"kimoox_cardholder_id": true, "kimoox_holder_id": true, "kimoox_card_group_id": true,
 		"kimoox_budget_id": true, "kimoox_webhook_tolerance_seconds": true,
 		"kimoox_apply_poll_attempts": true, "kimoox_apply_poll_interval_seconds": true,
 	}
@@ -265,6 +265,12 @@ func (s *Server) legacySaveConfig(c *gin.Context) {
 				return
 			}
 			value = strconv.Itoa(parsed)
+		case "kimoox_prepaid_amount_mode":
+			value = strings.ToUpper(strings.TrimSpace(value))
+			if value != "PLAN_PLUS_5" && value != "FIXED" {
+				c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "kimoox_prepaid_amount_mode 仅支持 PLAN_PLUS_5、FIXED"})
+				return
+			}
 		case "kimoox_prepaid_recharge_amount":
 			parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
 			if err != nil || parsed <= 0 || parsed > 100000 {
@@ -411,6 +417,7 @@ func normalizeLegacyConfigInput(input map[string]any) map[string]any {
 		"kimooxBaseURL":                        "kimoox_base_url",
 		"kimooxCardBINIDs":                     "kimoox_card_bin_ids",
 		"kimooxCardType":                       "kimoox_card_type",
+		"kimooxPrepaidAmountMode":              "kimoox_prepaid_amount_mode",
 		"kimooxPrepaidRechargeAmount":          "kimoox_prepaid_recharge_amount",
 		"kimooxCardholderID":                   "kimoox_cardholder_id",
 		"kimooxHolderID":                       "kimoox_holder_id",

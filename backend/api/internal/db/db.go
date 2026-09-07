@@ -319,6 +319,38 @@ func PlanTypeForPlan(plan models.Plan) string {
 	return "plus"
 }
 
+// ChatGPT list prices are USD even when the storefront sells CDKs in CNY.
+const (
+	ChatGPTPlusUSDPrice      = 20
+	ChatGPTPro5xUSDPrice     = 100
+	ChatGPTPro20xUSDPrice    = 200
+	PrepaidRechargeUSDBuffer = 5
+)
+
+func ChatGPTPlanListPriceUSD(plan models.Plan) (float64, bool) {
+	switch PlanTypeForPlan(plan) {
+	case "plus":
+		return ChatGPTPlusUSDPrice, true
+	case "pro_5x":
+		return ChatGPTPro5xUSDPrice, true
+	case "pro_20x":
+		return ChatGPTPro20xUSDPrice, true
+	default:
+		return 0, false
+	}
+}
+
+// PrepaidRechargeUSDForPlan is the Kimoox PREPAID top-up for one recharge.
+// It uses the ChatGPT USD list price plus a $5 buffer so the card can cover
+// the charge without depending on the storefront CNY price.
+func PrepaidRechargeUSDForPlan(plan models.Plan) (float64, bool) {
+	price, ok := ChatGPTPlanListPriceUSD(plan)
+	if !ok {
+		return 0, false
+	}
+	return price + PrepaidRechargeUSDBuffer, true
+}
+
 func prepareStoreOrderKeys(database *gorm.DB) error {
 	if !database.Migrator().HasTable(&models.StoreOrder{}) {
 		return nil
@@ -476,6 +508,7 @@ func seedPlans(database *gorm.DB) error {
 		"dogpay_velocity_amount_limit":             "0",
 		"kimoox_base_url":                          "https://card.kimoox.com",
 		"kimoox_card_type":                         "PREPAID",
+		"kimoox_prepaid_amount_mode":               "PLAN_PLUS_5",
 		"kimoox_prepaid_recharge_amount":           "220",
 		"kimoox_webhook_tolerance_seconds":         "300",
 		"kimoox_apply_poll_attempts":               "30",

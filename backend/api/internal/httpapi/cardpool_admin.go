@@ -134,8 +134,8 @@ func (s *Server) adminCreateProviderCard(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "该 Provider 不支持创建虚拟卡")
 		return
 	}
-	if input.Amount < 0 {
-		fail(c, http.StatusBadRequest, "首充金额不能小于 0")
+	if strings.EqualFold(input.Provider, "KIMOOX") && strings.EqualFold(s.configValue("kimoox_card_type", "PREPAID"), "PREPAID") && input.Amount <= 0 {
+		fail(c, http.StatusBadRequest, "手动创建虚拟卡必须填写大于 0 的首充金额")
 		return
 	}
 	card, err := s.CardPools.CreateCard(c.Request.Context(), cardpool.CreateCardRequest{

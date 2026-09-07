@@ -36,6 +36,26 @@ func TestNormalizeProviderPlanNameRepairsLegacyStoredAliases(t *testing.T) {
 	}
 }
 
+func TestPrepaidRechargeUSDForPlanAddsFiveDollarBuffer(t *testing.T) {
+	tests := []struct {
+		plan models.Plan
+		want float64
+		ok   bool
+	}{
+		{plan: models.Plan{Code: "plus"}, want: 25, ok: true},
+		{plan: models.Plan{Code: "pro_5x"}, want: 105, ok: true},
+		{plan: models.Plan{Code: "pro_20x"}, want: 205, ok: true},
+		{plan: models.Plan{Code: "shop-pro", ProviderPlanName: "chatgptpro"}, want: 205, ok: true},
+		{plan: models.Plan{Code: "go"}, want: 0, ok: false},
+	}
+	for _, tt := range tests {
+		got, ok := PrepaidRechargeUSDForPlan(tt.plan)
+		if ok != tt.ok || got != tt.want {
+			t.Fatalf("PrepaidRechargeUSDForPlan(%+v) = (%v, %v), want (%v, %v)", tt.plan, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
 func TestPlanTypeForPlanUsesCanonicalTypeForCustomStoreCodes(t *testing.T) {
 	tests := []struct {
 		name string

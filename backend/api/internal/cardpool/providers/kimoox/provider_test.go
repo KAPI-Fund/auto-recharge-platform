@@ -151,7 +151,25 @@ func TestProviderUsesSignedAsyncApplyAndCardLifecycle(t *testing.T) {
 	}
 }
 
-func TestPrepaidUsesConfiguredDefaultRechargeAmount(t *testing.T) {
+func TestPrepaidRejectsMissingRechargeAmount(t *testing.T) {
+	provider := New(testConfig{
+		"card_provider_kimoox_enabled":       "1",
+		"kimoox_base_url":                    "https://card.kimoox.com",
+		"kimoox_api_key":                     "api-key",
+		"kimoox_api_secret":                  "api-secret",
+		"kimoox_card_bin_ids":                "1001",
+		"kimoox_card_type":                   "PREPAID",
+		"kimoox_prepaid_recharge_amount":     "220",
+		"kimoox_apply_poll_attempts":         "1",
+		"kimoox_apply_poll_interval_seconds": "0",
+	}, nil)
+	_, err := provider.CreateCard(context.Background(), cardpool.CreateCardRequest{IdempotencyKey: "manual-1"})
+	if err == nil || !strings.Contains(err.Error(), "大于 0 的首充金额") {
+		t.Fatalf("CreateCard() error = %v, want missing amount", err)
+	}
+}
+
+func TestPrepaidUsesRequestedPlanBufferAmount(t *testing.T) {
 	const apiSecret = "api-secret"
 	config := testConfig{
 		"card_provider_kimoox_enabled":       "1",
@@ -176,8 +194,8 @@ func TestPrepaidUsesConfiguredDefaultRechargeAmount(t *testing.T) {
 		}
 		switch request.URL.Path {
 		case "/openapi/v1/cards/apply":
-			if payload["rechargeAmount"] != "220.00" {
-				t.Fatalf("rechargeAmount = %#v, want 220.00", payload["rechargeAmount"])
+			if payload["rechargeAmount"] != "25.00" {
+				t.Fatalf("rechargeAmount = %#v, want 25.00 from Plus 20+5", payload["rechargeAmount"])
 			}
 			_, _ = io.WriteString(writer, `{"code":200,"data":{"taskId":901,"batchNo":"BATCH-1"}}`)
 		case "/openapi/v1/cards/apply-status/query":
@@ -192,7 +210,7 @@ func TestPrepaidUsesConfiguredDefaultRechargeAmount(t *testing.T) {
 	config["kimoox_base_url"] = server.URL
 
 	provider := New(config, server.Client())
-	if _, err := provider.CreateCard(context.Background(), cardpool.CreateCardRequest{IdempotencyKey: "auto-1"}); err != nil {
+	if _, err := provider.CreateCard(context.Background(), cardpool.CreateCardRequest{Amount: 25, Currency: "USD", IdempotencyKey: "plus-1"}); err != nil {
 		t.Fatalf("CreateCard() error = %v", err)
 	}
 }

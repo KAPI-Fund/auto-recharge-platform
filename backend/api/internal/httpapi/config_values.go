@@ -38,7 +38,7 @@ func normalizeModernConfigValues(input map[string]string) (map[string]string, er
 		"dogpayPrivateKey": true, "dogpayWebhookSecret": true, "dogpayChannelID": true, "dogpayCardholderID": true,
 		"dogpayEntityID": true, "dogpayCardType": true, "dogpayBudgetID": true, "dogpayVelocityAmountLimit": true, "dogpayWebhookToleranceSeconds": true,
 		"kimooxEnabled": true, "kimooxBaseURL": true, "kimooxAPIKey": true, "kimooxAPISecret": true,
-		"kimooxWebhookSecret": true, "kimooxCardBINIDs": true, "kimooxCardType": true, "kimooxPrepaidRechargeAmount": true,
+		"kimooxWebhookSecret": true, "kimooxCardBINIDs": true, "kimooxCardType": true, "kimooxPrepaidAmountMode": true, "kimooxPrepaidRechargeAmount": true,
 		"kimooxCardholderID": true, "kimooxHolderID": true, "kimooxCardGroupID": true, "kimooxBudgetID": true,
 		"kimooxWebhookToleranceSeconds": true, "kimooxApplyPollAttempts": true, "kimooxApplyPollIntervalSeconds": true,
 	}
@@ -63,7 +63,7 @@ func normalizeModernConfigValues(input map[string]string) (map[string]string, er
 		"dogpay_base_url", "dogpay_appid", "dogpay_secret", "dogpay_private_key", "dogpay_webhook_secret", "dogpay_channel_id",
 		"dogpay_cardholder_id", "dogpay_entity_id", "dogpay_card_type", "dogpay_budget_id", "dogpay_velocity_amount_limit", "dogpay_webhook_tolerance_seconds",
 		"kimoox_base_url", "kimoox_api_key", "kimoox_api_secret", "kimoox_webhook_secret", "kimoox_card_bin_ids", "kimoox_card_type",
-		"kimoox_prepaid_recharge_amount",
+		"kimoox_prepaid_amount_mode", "kimoox_prepaid_recharge_amount",
 		"kimoox_cardholder_id", "kimoox_holder_id", "kimoox_card_group_id", "kimoox_budget_id", "kimoox_webhook_tolerance_seconds",
 		"kimoox_apply_poll_attempts", "kimoox_apply_poll_interval_seconds",
 		"stripe_secret_key", "stripe_webhook_secret", "store_debug_mode", "stripe_success_url", "stripe_cancel_url", "public_base_url",
@@ -104,7 +104,7 @@ func normalizeModernConfigValues(input map[string]string) (map[string]string, er
 		"dogpayVelocityAmountLimit": "dogpay_velocity_amount_limit", "dogpayWebhookToleranceSeconds": "dogpay_webhook_tolerance_seconds",
 		"kimooxEnabled": "card_provider_kimoox_enabled", "kimooxBaseURL": "kimoox_base_url", "kimooxAPIKey": "kimoox_api_key",
 		"kimooxAPISecret": "kimoox_api_secret", "kimooxWebhookSecret": "kimoox_webhook_secret", "kimooxCardBINIDs": "kimoox_card_bin_ids",
-		"kimooxCardType": "kimoox_card_type", "kimooxPrepaidRechargeAmount": "kimoox_prepaid_recharge_amount",
+		"kimooxCardType": "kimoox_card_type", "kimooxPrepaidAmountMode": "kimoox_prepaid_amount_mode", "kimooxPrepaidRechargeAmount": "kimoox_prepaid_recharge_amount",
 		"kimooxCardholderID": "kimoox_cardholder_id", "kimooxHolderID": "kimoox_holder_id",
 		"kimooxCardGroupID": "kimoox_card_group_id", "kimooxBudgetID": "kimoox_budget_id",
 		"kimooxWebhookToleranceSeconds": "kimoox_webhook_tolerance_seconds", "kimooxApplyPollAttempts": "kimoox_apply_poll_attempts",
@@ -214,6 +214,12 @@ func normalizeModernConfigValue(key, value string) (string, error) {
 		value = strings.ToUpper(value)
 		if value != "PREPAID" && value != "BUDGET" {
 			return "", fmt.Errorf("kimoox_card_type 仅支持 PREPAID、BUDGET")
+		}
+		return value, nil
+	case "kimoox_prepaid_amount_mode":
+		value = strings.ToUpper(strings.TrimSpace(value))
+		if value != "PLAN_PLUS_5" && value != "FIXED" {
+			return "", fmt.Errorf("kimoox_prepaid_amount_mode 仅支持 PLAN_PLUS_5、FIXED")
 		}
 		return value, nil
 	case "kimoox_prepaid_recharge_amount":

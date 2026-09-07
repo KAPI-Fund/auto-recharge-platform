@@ -278,6 +278,7 @@ const providerConfigKeys = [
   "kimoox_webhook_secret",
   "kimoox_card_bin_ids",
   "kimoox_card_type",
+  "kimoox_prepaid_amount_mode",
   "kimoox_prepaid_recharge_amount",
   "kimoox_cardholder_id",
   "kimoox_holder_id",
@@ -2455,7 +2456,8 @@ function ConfigPanel({
               <p className="config-help">保存后每次开卡会从已选 BIN 中稳定选择一个；同一幂等任务重试不会随机换 BIN。当前仅支持新的多 BIN 配置字段。</p>
             </label>
             <label>卡类型<select value={field("kimoox_card_type", "PREPAID")} onChange={(event) => update("kimoox_card_type", event.target.value)} className="asset-input"><option value="PREPAID">PREPAID 储值卡</option><option value="BUDGET">BUDGET 预算卡</option></select><p className="config-help">PREPAID 需要首充金额；BUDGET 需要同时填写 Card Group ID 和 Budget ID。</p></label>
-            <label>PREPAID 默认首充金额<input type="number" min={0.01} max={100000} step="0.01" value={field("kimoox_prepaid_recharge_amount", "220")} onChange={(event) => update("kimoox_prepaid_recharge_amount", event.target.value)} className="asset-input" /><p className="config-help">自动开卡，以及手动开卡未填金额时使用。按最大 Pro 20x 建议 220（USD）。</p></label>
+            <label>PREPAID 首充金额<select value={field("kimoox_prepaid_amount_mode", "PLAN_PLUS_5")} onChange={(event) => update("kimoox_prepaid_amount_mode", event.target.value)} className="asset-input"><option value="PLAN_PLUS_5">套餐美元标价 + 5（Plus 25 / Pro 5x 105 / Pro 20x 205）</option><option value="FIXED">固定金额</option></select><p className="config-help">充值任务自动开卡使用此规则，店内 CNY 售价不参与。手动创建虚拟卡必须填写首充金额。</p></label>
+            {field("kimoox_prepaid_amount_mode", "PLAN_PLUS_5") === "FIXED" ? <label>固定首充金额（USD）<input type="number" min={0.01} max={100000} step="0.01" value={field("kimoox_prepaid_recharge_amount")} onChange={(event) => update("kimoox_prepaid_recharge_amount", event.target.value)} className="asset-input" /></label> : null}
             <label>Cardholder ID（可选）<input value={field("kimoox_cardholder_id")} onChange={(event) => update("kimoox_cardholder_id", event.target.value)} className="asset-input" placeholder="数字 ID；也可使用 Holder ID" /></label>
             <label>Holder ID（可选）<input value={field("kimoox_holder_id")} onChange={(event) => update("kimoox_holder_id", event.target.value)} className="asset-input" /></label>
             <label>Card Group ID（BUDGET 必填）<input disabled={field("kimoox_card_type", "PREPAID") !== "BUDGET"} value={field("kimoox_card_group_id")} onChange={(event) => update("kimoox_card_group_id", event.target.value)} className="asset-input" /></label>
@@ -3518,13 +3520,18 @@ function CardsPanel({
       setError("请选择卡池和已启用的 Provider");
       return;
     }
+    const amount = Number(createForm.amount);
+    if (!createForm.amount.trim() || !Number.isFinite(amount) || amount <= 0) {
+      setError("请填写大于 0 的首充金额");
+      return;
+    }
     setCreating(true);
     try {
       await createProviderCard({
         poolId,
         provider,
         usageType: createForm.usageType,
-        amount: createForm.amount.trim() ? Number(createForm.amount) : 0,
+        amount,
         currency: createForm.currency.trim().toUpperCase(),
         cardholderName: createForm.cardholderName.trim(),
         idempotencyKey: typeof crypto?.randomUUID === "function" ? crypto.randomUUID() : `manual-${Date.now()}`,
@@ -3585,7 +3592,7 @@ function CardsPanel({
             <label>卡池<select value={createForm.poolId} onChange={(event) => { const poolId = event.target.value; const available = providersForPool(poolId); setCreateForm((current) => ({ ...current, poolId, provider: available.some((provider) => text(provider, "provider").toUpperCase() === current.provider.toUpperCase()) ? current.provider : text(available[0], "provider", "") })); }} className="asset-input"><option value="">请选择卡池</option>{poolRows.map((pool) => <option key={text(pool, "id")} value={text(pool, "id")}>{text(pool, "name", text(pool, "id"))}</option>)}</select></label>
             <label>Provider<select value={createForm.provider} onChange={(event) => setCreateForm({ ...createForm, provider: event.target.value })} className="asset-input"><option value="">请选择 Provider</option>{creatableProviders.map((provider) => <option key={text(provider, "provider")} value={text(provider, "provider")}>{text(provider, "provider")}</option>)}</select></label>
             <label>用途<select value="ONE_TIME" disabled className="asset-input"><option value="ONE_TIME">ONE_TIME 一次性</option></select><p className="config-help">充值卡统一一次性使用；任务完成或失败后都会销毁，不能再次分配。</p></label>
-            <label>首充金额（可选）<input type="number" min={0} step="0.01" value={createForm.amount} onChange={(event) => setCreateForm({ ...createForm, amount: event.target.value })} className="asset-input" placeholder="0" /></label>
+            <label>首充金额（USD）<input type="number" min={0.01} step="0.01" value={createForm.amount} onChange={(event) => setCreateForm({ ...createForm, amount: event.target.value })} className="asset-input" placeholder="必填" /></label>
             <label>币种<input value={createForm.currency} onChange={(event) => setCreateForm({ ...createForm, currency: event.target.value })} className="asset-input" maxLength={3} /></label>
             <label>持卡人<input value={createForm.cardholderName} onChange={(event) => setCreateForm({ ...createForm, cardholderName: event.target.value })} className="asset-input" /></label>
           </div>

@@ -906,18 +906,7 @@ func (p *Provider) prepaidRechargeAmount(requested float64) (float64, error) {
 	if requested > 0 {
 		return requested, nil
 	}
-	raw := ""
-	if p != nil {
-		raw = strings.TrimSpace(p.value("kimoox_prepaid_recharge_amount", "220"))
-	}
-	if raw == "" {
-		return 0, errors.New("Kimoox PREPAID 开卡需要大于 0 的首充金额，请在发卡配置中填写默认首充金额")
-	}
-	parsed, err := strconv.ParseFloat(raw, 64)
-	if err != nil || parsed <= 0 {
-		return 0, errors.New("Kimoox PREPAID 默认首充金额无效")
-	}
-	return parsed, nil
+	return 0, errors.New("Kimoox PREPAID 开卡需要大于 0 的首充金额")
 }
 
 func parseOptionalInt(value string) *int64 {

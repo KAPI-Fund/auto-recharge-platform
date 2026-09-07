@@ -539,6 +539,10 @@ func (s *Server) internalReserveCardContext(ctx context.Context, input cardReser
 		if strings.TrimSpace(input.IdempotencyKey) == "" {
 			request.IdempotencyKey = "task:" + task.ID
 		}
+		if amount, currency := s.prepaidAmountForTask(ctx, task); amount > 0 {
+			request.Amount = amount
+			request.Currency = currency
+		}
 	}
 
 	result, err := s.CardPools.AcquireCard(ctx, request)
@@ -577,6 +581,32 @@ func (s *Server) internalReserveCardContext(ctx context.Context, input cardReser
 		"providerCardId": result.Card.ProviderCardID, "pool_id": result.Card.PoolID, "poolId": result.Card.PoolID,
 		"allocationId": result.AllocationID, "allocation_id": result.AllocationID,
 	}, nil
+}
+
+func (s *Server) prepaidAmountForTask(ctx context.Context, task *models.RechargeTask) (float64, string) {
+	if s == nil || task == nil {
+		return 0, ""
+	}
+	mode := strings.ToUpper(strings.TrimSpace(s.configValue("kimoox_prepaid_amount_mode", "PLAN_PLUS_5")))
+	if mode == "FIXED" {
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(s.configValue("kimoox_prepaid_recharge_amount", "")), 64)
+		if err != nil || parsed <= 0 {
+			return 0, ""
+		}
+		return parsed, "USD"
+	}
+	if s.DB == nil || strings.TrimSpace(task.PlanID) == "" {
+		return 0, ""
+	}
+	var plan models.Plan
+	if err := s.DB.WithContext(ctx).Where("id = ?", task.PlanID).First(&plan).Error; err != nil {
+		return 0, ""
+	}
+	amount, ok := db.PrepaidRechargeUSDForPlan(plan)
+	if !ok {
+		return 0, ""
+	}
+	return amount, "USD"
 }
 
 func (s *Server) findCardReservationTask(ctx context.Context, input cardReservationInput) (*models.RechargeTask, error) {
