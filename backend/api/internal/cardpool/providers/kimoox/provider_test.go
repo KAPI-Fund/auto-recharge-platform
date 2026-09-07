@@ -151,6 +151,52 @@ func TestProviderUsesSignedAsyncApplyAndCardLifecycle(t *testing.T) {
 	}
 }
 
+func TestPrepaidUsesConfiguredDefaultRechargeAmount(t *testing.T) {
+	const apiSecret = "api-secret"
+	config := testConfig{
+		"card_provider_kimoox_enabled":       "1",
+		"kimoox_api_key":                     "api-key",
+		"kimoox_api_secret":                  apiSecret,
+		"kimoox_card_bin_ids":                "1001",
+		"kimoox_card_type":                   "PREPAID",
+		"kimoox_prepaid_recharge_amount":     "220",
+		"kimoox_apply_poll_attempts":         "1",
+		"kimoox_apply_poll_interval_seconds": "0",
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		assertKimooxSignature(t, request, body, apiSecret)
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		switch request.URL.Path {
+		case "/openapi/v1/cards/apply":
+			if payload["rechargeAmount"] != "220.00" {
+				t.Fatalf("rechargeAmount = %#v, want 220.00", payload["rechargeAmount"])
+			}
+			_, _ = io.WriteString(writer, `{"code":200,"data":{"taskId":901,"batchNo":"BATCH-1"}}`)
+		case "/openapi/v1/cards/apply-status/query":
+			_, _ = io.WriteString(writer, `{"code":200,"data":{"taskId":901,"batchNo":"BATCH-1","applyStatus":"SUCCESS","taskStatus":"SUCCESS"}}`)
+		case "/openapi/v1/cards/query":
+			_, _ = io.WriteString(writer, `{"code":200,"data":{"list":[{"cardId":"VC-1","cardNoMask":"486880****1234","cardType":"PREPAID","cardStatus":"ACTIVE"}]}}`)
+		default:
+			t.Fatalf("unexpected path %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	config["kimoox_base_url"] = server.URL
+
+	provider := New(config, server.Client())
+	if _, err := provider.CreateCard(context.Background(), cardpool.CreateCardRequest{IdempotencyKey: "auto-1"}); err != nil {
+		t.Fatalf("CreateCard() error = %v", err)
+	}
+}
+
 func TestProviderDecryptsKimooxSensitiveDetails(t *testing.T) {
 	secret := "webhook-secret"
 	key := kimooxSensitiveKey(secret)

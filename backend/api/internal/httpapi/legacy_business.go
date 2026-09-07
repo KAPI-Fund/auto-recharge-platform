@@ -126,6 +126,7 @@ func (s *Server) legacySaveConfig(c *gin.Context) {
 		"email_smtp_host": true, "email_smtp_port": true, "email_smtp_username": true, "email_smtp_from": true,
 		"email_smtp_from_name": true, "email_smtp_use_tls": true, "email_smtp_timeout_seconds": true,
 		"card_pool_default_id": true, "card_pool_routing": true, "card_pool_default_provider": true, "card_pool_card_creation_mode": true,
+		"card_pool_cancel_after_payment":   true,
 		"card_provider_local_text_enabled": true, "card_provider_airwallex_enabled": true,
 		"card_provider_stripe_issuing_enabled": true,
 		"card_provider_photonpay_enabled":      true, "card_provider_dogpay_enabled": true,
@@ -145,7 +146,8 @@ func (s *Server) legacySaveConfig(c *gin.Context) {
 		"dogpay_card_type": true, "dogpay_budget_id": true,
 		"dogpay_webhook_tolerance_seconds": true,
 		"kimoox_base_url":                  true, "kimoox_card_bin_ids": true, "kimoox_card_type": true,
-		"kimoox_cardholder_id": true, "kimoox_holder_id": true, "kimoox_card_group_id": true,
+		"kimoox_prepaid_recharge_amount": true,
+		"kimoox_cardholder_id":           true, "kimoox_holder_id": true, "kimoox_card_group_id": true,
 		"kimoox_budget_id": true, "kimoox_webhook_tolerance_seconds": true,
 		"kimoox_apply_poll_attempts": true, "kimoox_apply_poll_interval_seconds": true,
 	}
@@ -181,7 +183,8 @@ func (s *Server) legacySaveConfig(c *gin.Context) {
 		case "maintenance_mode", "maintenance_mode_drain", "browser_pool_enabled",
 			"card_provider_local_text_enabled", "card_provider_airwallex_enabled",
 			"card_provider_stripe_issuing_enabled", "card_provider_photonpay_enabled",
-			"card_provider_dogpay_enabled", "card_provider_kimoox_enabled", "airwallex_activate_on_issue":
+			"card_provider_dogpay_enabled", "card_provider_kimoox_enabled", "airwallex_activate_on_issue",
+			"card_pool_cancel_after_payment":
 			value = boolConfigValue(input[key])
 		case "random_email_domain", "inbox_email_domain":
 			value = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(value), "@"))
@@ -262,6 +265,13 @@ func (s *Server) legacySaveConfig(c *gin.Context) {
 				return
 			}
 			value = strconv.Itoa(parsed)
+		case "kimoox_prepaid_recharge_amount":
+			parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+			if err != nil || parsed <= 0 || parsed > 100000 {
+				c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "kimoox_prepaid_recharge_amount 必须是大于 0 且不超过 100000 的金额"})
+				return
+			}
+			value = strconv.FormatFloat(parsed, 'f', -1, 64)
 		case "kimoox_card_type":
 			value = strings.ToUpper(strings.TrimSpace(value))
 			if value != "PREPAID" && value != "BUDGET" {
@@ -350,6 +360,7 @@ func normalizeLegacyConfigInput(input map[string]any) map[string]any {
 		"cardPoolRouting":                      "card_pool_routing",
 		"cardPoolDefaultProvider":              "card_pool_default_provider",
 		"cardPoolCardCreationMode":             "card_pool_card_creation_mode",
+		"cardPoolCancelAfterPayment":           "card_pool_cancel_after_payment",
 		"localTextEnabled":                     "card_provider_local_text_enabled",
 		"airwallexEnabled":                     "card_provider_airwallex_enabled",
 		"photonpayEnabled":                     "card_provider_photonpay_enabled",
@@ -400,6 +411,7 @@ func normalizeLegacyConfigInput(input map[string]any) map[string]any {
 		"kimooxBaseURL":                        "kimoox_base_url",
 		"kimooxCardBINIDs":                     "kimoox_card_bin_ids",
 		"kimooxCardType":                       "kimoox_card_type",
+		"kimooxPrepaidRechargeAmount":          "kimoox_prepaid_recharge_amount",
 		"kimooxCardholderID":                   "kimoox_cardholder_id",
 		"kimooxHolderID":                       "kimoox_holder_id",
 		"kimooxCardGroupID":                    "kimoox_card_group_id",
@@ -1446,30 +1458,38 @@ func firstNonEmpty(values ...string) string {
 
 func (s *Server) legacyDeleteCard(c *gin.Context) {
 	cardID := strings.TrimSpace(c.Param("id"))
+	cancelProvider := boolConfigValue(c.Query("cancel_provider")) == "1"
 	result := s.DB.Delete(&models.CardAsset{}, "id = ?", cardID)
 	if result.Error != nil {
 		fail(c, http.StatusInternalServerError, "删除银行卡失败")
 		return
 	}
 	if result.RowsAffected > 0 {
-		c.JSON(http.StatusOK, gin.H{"success": true})
+		c.JSON(http.StatusOK, gin.H{"success": true, "localOnly": true})
 		return
 	}
 	// Provider-issued cards are retained as audit rows. Deleting one from the
-	// admin list means cancelling it remotely and marking it terminal locally,
-	// never physically deleting the normalized card record.
+	// admin list never physically deletes the normalized card record.
 	if s.CardPools != nil {
 		var card models.PaymentCard
 		if lookup := s.DB.Where("id = ?", cardID).First(&card); lookup.Error == nil {
 			if card.InUse {
-				c.JSON(http.StatusConflict, gin.H{"success": false, "message": "卡片正在被任务使用，暂不能销卡"})
+				c.JSON(http.StatusConflict, gin.H{"success": false, "message": "卡片正在被任务使用，暂不能删除"})
 				return
 			}
-			if err := s.CardPools.MarkCardExhausted(c.Request.Context(), card.ID); err != nil {
+			if cancelProvider {
+				if err := s.CardPools.MarkCardExhausted(c.Request.Context(), card.ID); err != nil {
+					fail(c, http.StatusBadRequest, err.Error())
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"success": true, "status": string(cardpool.CardCancelled), "providerCancelled": true})
+				return
+			}
+			if err := s.CardPools.RetireCardLocally(c.Request.Context(), card.ID); err != nil {
 				fail(c, http.StatusBadRequest, err.Error())
 				return
 			}
-			c.JSON(http.StatusOK, gin.H{"success": true, "status": string(cardpool.CardCancelled)})
+			c.JSON(http.StatusOK, gin.H{"success": true, "status": string(cardpool.CardCancelled), "providerCancelled": false})
 			return
 		} else if lookup.Error != nil && !errors.Is(lookup.Error, gorm.ErrRecordNotFound) {
 			fail(c, http.StatusInternalServerError, "读取银行卡失败")

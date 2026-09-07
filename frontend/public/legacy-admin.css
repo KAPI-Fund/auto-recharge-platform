@@ -3529,6 +3529,10 @@
             box-shadow: var(--shadow-lg);
         }
 
+        .admin-confirm-dialog-wide {
+            max-width: 560px;
+        }
+
         .admin-confirm-title {
             font-size: 15px;
             font-weight: 600;

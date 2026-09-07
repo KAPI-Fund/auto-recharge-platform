@@ -95,7 +95,7 @@ func TestOneTimeCardIsUsedAndCannotBeReallocated(t *testing.T) {
 	if err := database.First(&storedCard, "id = ?", result.Card.InternalCardID).Error; err != nil {
 		t.Fatalf("read normalized card: %v", err)
 	}
-	if storedCard.Status != string(cardpool.CardUsed) || storedCard.InUse {
+	if storedCard.Status != string(cardpool.CardCancelled) || storedCard.InUse {
 		t.Fatalf("normalized one-time card = %+v", storedCard)
 	}
 	if _, err := service.AcquireCard(context.Background(), cardpool.AcquireCardRequest{PoolID: poolID, PaymentTaskID: "one-time-task-2", UsageType: cardpool.UsageOneTime}); !errors.Is(err, cardpool.ErrNoAvailableCard) {

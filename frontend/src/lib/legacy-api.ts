@@ -325,9 +325,10 @@ export function importCardPool(body: JsonMap) {
     true,
   );
 }
-export function deleteCard(id: string) {
+export function deleteCard(id: string, options?: { cancelProvider?: boolean }) {
+  const query = options?.cancelProvider ? "cancel_provider=1" : "cancel_provider=0";
   return legacyRequest<JsonMap>(
-    `/admin/cards/${encodeURIComponent(id)}`,
+    `/admin/cards/${encodeURIComponent(id)}?${query}`,
     { method: "DELETE" },
     true,
   );

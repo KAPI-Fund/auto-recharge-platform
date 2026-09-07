@@ -775,10 +775,11 @@ func (s *Service) releaseCardForAllocation(ctx context.Context, internalID, allo
 		}
 		pendingRelease := allocation.ProviderReleasePending || strings.TrimSpace(allocation.ProviderReleaseError) != ""
 		if allocation.Status == string(AllocationReleased) || (allocation.Status == string(AllocationFailed) && pendingRelease) {
-			if !pendingRelease && allocation.UsageType == string(UsageOneTime) && allocation.ProviderReleasedAt == nil {
+			providerReleaseAction = s.providerReleaseActionForAllocation(allocation, hasAllocationReservation, hasReservation)
+			if !pendingRelease && allocation.UsageType == string(UsageOneTime) && allocation.ProviderReleasedAt == nil && providerReleaseAction == ProviderReleaseActionCancel {
 				pendingRelease = true
 			}
-			if !pendingRelease {
+			if !pendingRelease || providerReleaseAction == "" {
 				return nil
 			}
 			var remaining int64
@@ -792,7 +793,6 @@ func (s *Service) releaseCardForAllocation(ctx context.Context, internalID, allo
 			}
 			providerReleaseRequired = true
 			releasedAllocationID = allocation.ID
-			providerReleaseAction = firstNonEmpty(allocation.ProviderReleaseAction, releaseActionForProvider(allocation.UsageType, allocation.UsageRecordedAt != nil, hasAllocationReservation, hasReservation))
 			if allocation.ProviderReleaseAction == "" && providerReleaseAction != "" {
 				if err := tx.Model(&allocation).Updates(map[string]any{
 					"provider_release_pending": true,
@@ -833,9 +833,12 @@ func (s *Service) releaseCardForAllocation(ctx context.Context, internalID, allo
 			status = string(CardActive)
 		}
 		if allocation.UsageRecordedAt != nil && allocation.UsageType == string(UsageOneTime) {
-			status = string(CardUsed)
+			// One-time cards leave the usable pool after a recorded payment
+			// attempt. Remote cancel is optional and may cost money; local
+			// retirement still marks the card terminal.
+			status = string(CardCancelled)
 		}
-		providerReleaseAction = releaseActionForProvider(allocation.UsageType, allocation.UsageRecordedAt != nil, hasAllocationReservation, hasReservation)
+		providerReleaseAction = s.providerReleaseActionForAllocation(allocation, hasAllocationReservation, hasReservation)
 		providerReleaseRequired = providerReleaseAction != ""
 		cardUpdates := map[string]any{"in_use": false, "status": status}
 		if providerReleaseAction == ProviderReleaseActionCancel {
@@ -987,12 +990,43 @@ func (s *Service) persistProviderReleaseResult(ctx context.Context, cardID, allo
 	})
 }
 
-func releaseActionForProvider(usageType string, usageRecorded bool, hasAllocationReservation, hasReservation bool) string {
-	// A one-time card is cancelled only after the payment attempt has been
-	// recorded. If checkout never submitted (missing button, pre-submit
-	// captcha, form not ready), releasing the allocation must not invalidate the
-	// card or call the Provider cancellation API.
-	if usageType == string(UsageOneTime) && usageRecorded {
+func (s *Service) CancelProviderAfterSuccessfulPayment() bool {
+	if s == nil || s.Config == nil {
+		return true
+	}
+	value := strings.TrimSpace(s.Config.Value("card_pool_cancel_after_payment", "1"))
+	return value == "1" || strings.EqualFold(value, "true")
+}
+
+func (s *Service) cancelProviderAfterSuccessfulPayment() bool {
+	return s.CancelProviderAfterSuccessfulPayment()
+}
+
+func allocationPaymentSucceeded(allocation models.CardAllocation) bool {
+	return allocation.UsageRecordedAt != nil && strings.TrimSpace(allocation.FailureCode) == ""
+}
+
+func (s *Service) providerReleaseActionForAllocation(allocation models.CardAllocation, hasAllocationReservation, hasReservation bool) string {
+	if action := strings.TrimSpace(allocation.ProviderReleaseAction); action != "" {
+		return action
+	}
+	return releaseActionForProvider(
+		allocation.UsageType,
+		allocation.UsageRecordedAt != nil,
+		allocationPaymentSucceeded(allocation),
+		s.cancelProviderAfterSuccessfulPayment(),
+		hasAllocationReservation,
+		hasReservation,
+	)
+}
+
+func releaseActionForProvider(usageType string, usageRecorded, paymentSucceeded, cancelAfterPayment, hasAllocationReservation, hasReservation bool) string {
+	// A one-time card is cancelled remotely only after a successful payment,
+	// and only when the admin switch is on. Failed payments and the off
+	// switch retire the card locally without calling the paid cancel API.
+	// Unsubmitted checkout (captcha, form not ready) still records no usage
+	// and must not invalidate the card.
+	if usageType == string(UsageOneTime) && usageRecorded && paymentSucceeded && cancelAfterPayment {
 		return ProviderReleaseActionCancel
 	}
 	if hasAllocationReservation || hasReservation {
@@ -1072,6 +1106,52 @@ func (s *Service) MarkCardExhausted(ctx context.Context, internalID string) erro
 	return s.MarkCardExhaustedForAllocation(ctx, internalID, "")
 }
 
+// RetireCardLocally removes a card from the usable pool without calling the
+// Provider cancel API. Remote cards remain live until cancelled separately.
+func (s *Service) RetireCardLocally(ctx context.Context, internalID string) error {
+	if s == nil || s.DB == nil {
+		return errors.New("card pool database is unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	internalID = strings.TrimSpace(internalID)
+	now := s.now()
+	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var locked models.PaymentCard
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", internalID).First(&locked).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrCardNotFound
+			}
+			return err
+		}
+		if locked.InUse {
+			return errors.New("卡片正在被任务使用，暂不能删除")
+		}
+		if locked.Status != string(CardCancelled) {
+			if err := tx.Model(&locked).Updates(map[string]any{"in_use": false, "status": string(CardCancelled)}).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Model(&models.CardAllocation{}).
+			Where("payment_card_id = ? AND status IN ?", locked.ID, activeAllocationStatuses).
+			Updates(map[string]any{"status": string(AllocationFailed), "released_at": now, "failure_code": "local_deleted", "failure_message": "deleted locally without provider cancel"}).Error; err != nil {
+			return err
+		}
+		// Drop any queued remote cancel so RetryPendingProviderReleases cannot
+		// still call the paid Provider API after an explicit local-only delete.
+		return tx.Model(&models.CardAllocation{}).
+			Where("payment_card_id = ? AND provider_release_pending = ?", locked.ID, true).
+			Updates(map[string]any{
+				"provider_release_pending":     false,
+				"provider_release_action":      "",
+				"provider_release_error":       "",
+				"provider_release_claim_token": "",
+				"provider_release_claimed_at":  nil,
+			}).Error
+	})
+}
+
 // RecordCardFailure stores the provider-facing failure classification on the
 // normalized card, its allocation, and (when known) the recharge task. This
 // is intentionally separate from MarkCardExhausted: a form validation,
@@ -1149,7 +1229,7 @@ func (s *Service) MarkCardExhaustedForAllocation(ctx context.Context, internalID
 		}
 		return err
 	}
-	if row.Status == string(CardCancelled) {
+	if row.Status == string(CardCancelled) && strings.TrimSpace(row.ProviderCardID) == "" {
 		return nil
 	}
 	if strings.TrimSpace(allocationID) != "" {

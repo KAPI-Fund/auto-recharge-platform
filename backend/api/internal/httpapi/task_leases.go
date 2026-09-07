@@ -413,7 +413,11 @@ func (s *Server) expireRechargeTaskTx(tx *gorm.DB, task *models.RechargeTask, er
 	if err := tx.Model(task).Updates(updates).Error; err != nil {
 		return false, err
 	}
-	if err := releaseTaskCardAllocationTx(tx, task.ID, task.CardAllocationID, errorCode, message, now); err != nil {
+	cancelAfterPayment := true
+	if s != nil && s.CardPools != nil {
+		cancelAfterPayment = s.CardPools.CancelProviderAfterSuccessfulPayment()
+	}
+	if err := releaseTaskCardAllocationTx(tx, task.ID, task.CardAllocationID, errorCode, message, now, cancelAfterPayment); err != nil {
 		return false, err
 	}
 	if task.CDKID != nil {
@@ -445,7 +449,7 @@ func (s *Server) expireRechargeTaskTx(tx *gorm.DB, task *models.RechargeTask, er
 // Worker lease that expired before the Worker could call the bridge. It keeps
 // the task's allocation isolated and releases the underlying LOCAL_TEXT asset
 // only when no other recurring allocation still owns the normalized card.
-func releaseTaskCardAllocationTx(tx *gorm.DB, taskID, allocationID, failureCode, failureMessage string, now time.Time) error {
+func releaseTaskCardAllocationTx(tx *gorm.DB, taskID, allocationID, failureCode, failureMessage string, now time.Time, cancelAfterPayment bool) error {
 	var allocation models.CardAllocation
 	query := tx.Clauses(clause.Locking{Strength: "UPDATE"})
 	if strings.TrimSpace(allocationID) != "" {
@@ -493,15 +497,18 @@ func releaseTaskCardAllocationTx(tx *gorm.DB, taskID, allocationID, failureCode,
 	}
 	cardUpdates := map[string]any{"in_use": false, "status": status}
 	if allocation.UsageType == string(cardpool.UsageOneTime) {
-		// A one-time card exists only for this task. Mark it unavailable until
-		// the post-transaction compensation pass successfully cancels it at the
-		// Provider. This also applies to LOCAL_TEXT: its adapter's CancelCard
-		// retires the underlying imported asset instead of merely unlocking it.
-		cardUpdates["status"] = string(cardpool.CardFailed)
-		if err := tx.Model(&allocation).Updates(map[string]any{
-			"provider_release_pending": true, "provider_release_action": cardpool.ProviderReleaseActionCancel,
-		}).Error; err != nil {
-			return err
+		usageRecorded := allocation.UsageRecordedAt != nil
+		paymentSucceeded := usageRecorded && strings.TrimSpace(allocation.FailureCode) == ""
+		if usageRecorded {
+			cardUpdates["status"] = string(cardpool.CardCancelled)
+			if paymentSucceeded && cancelAfterPayment {
+				cardUpdates["status"] = string(cardpool.CardFailed)
+				if err := tx.Model(&allocation).Updates(map[string]any{
+					"provider_release_pending": true, "provider_release_action": cardpool.ProviderReleaseActionCancel,
+				}).Error; err != nil {
+					return err
+				}
+			}
 		}
 	}
 	if err := tx.Model(&card).Updates(cardUpdates).Error; err != nil {

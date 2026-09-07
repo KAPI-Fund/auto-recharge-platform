@@ -166,8 +166,8 @@ func TestServiceOnDemandAllocationCreatesAndDestroysOneCardPerAttempt(t *testing
 	if _, err := service.SettleCardForAllocation(context.Background(), second.Card.InternalCardID, second.AllocationID, "task-2", "card_declined", "declined"); err != nil {
 		t.Fatalf("settle failed one-time card: %v", err)
 	}
-	if provider.cancels.Load() != 2 {
-		t.Fatalf("provider cancellation count = %d, want 2", provider.cancels.Load())
+	if provider.cancels.Load() != 1 {
+		t.Fatalf("provider cancellation count = %d, want 1 successful-payment cancel and no failed-payment cancel", provider.cancels.Load())
 	}
 	for _, cardID := range []string{first.Card.InternalCardID, second.Card.InternalCardID} {
 		var card models.PaymentCard
@@ -194,7 +194,7 @@ func TestExternalOneTimeProviderCancellationIsRetryable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("external one-time acquire: %v", err)
 	}
-	if _, err := service.SettleCardForAllocation(context.Background(), result.Card.InternalCardID, result.AllocationID, "external-one-time", "provider_timeout", "provider timeout"); err == nil {
+	if _, err := service.SettleCardForAllocation(context.Background(), result.Card.InternalCardID, result.AllocationID, "external-one-time", "", ""); err == nil {
 		t.Fatal("first provider cancellation unexpectedly succeeded")
 	}
 	var allocation models.CardAllocation
@@ -306,7 +306,7 @@ func TestConcurrentRecoveryRetriesClaimOnePendingProviderRelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire card: %v", err)
 	}
-	if _, err := service.SettleCardForAllocation(context.Background(), result.Card.InternalCardID, result.AllocationID, "concurrent-recovery", "provider_timeout", "temporary provider failure"); err == nil {
+	if _, err := service.SettleCardForAllocation(context.Background(), result.Card.InternalCardID, result.AllocationID, "concurrent-recovery", "", ""); err == nil {
 		t.Fatal("initial settlement unexpectedly succeeded")
 	}
 
@@ -396,6 +396,65 @@ func TestOnDemandAcquireDoesNotResurrectConsumedProviderCard(t *testing.T) {
 	}
 	if allocation.Status != string(AllocationFailed) || allocation.FailureCode != "card_consumed" {
 		t.Fatalf("terminal allocation = %+v, want failed/card_consumed", allocation)
+	}
+}
+
+func TestRetireCardLocallyDoesNotCallProviderCancel(t *testing.T) {
+	database := openCardPoolIntegrationDatabase(t)
+	provider := &lifecycleIntegrationProvider{fixedCardID: "remote-local-retire-card"}
+	registry := NewProviderRegistry()
+	registry.Register(provider)
+	service := NewService(database, registry, nil)
+	poolID := createIntegrationPool(t, database, UsageOneTime, provider.ProviderName())
+	defer cleanupIntegrationPool(database, poolID)
+
+	cardID := db.NewID("local_retire_card")
+	card := models.PaymentCard{
+		ID: cardID, PoolID: poolID, Provider: provider.ProviderName(), ProviderCardID: provider.fixedCardID,
+		Last4: "4242", UsageType: string(UsageOneTime), Currency: "USD", Status: string(CardActive),
+	}
+	if err := database.Create(&card).Error; err != nil {
+		t.Fatalf("create card: %v", err)
+	}
+
+	if err := service.RetireCardLocally(context.Background(), cardID); err != nil {
+		t.Fatalf("RetireCardLocally() error = %v", err)
+	}
+	if provider.cancelCalls.Load() != 0 {
+		t.Fatalf("RetireCardLocally called CancelCard %d times", provider.cancelCalls.Load())
+	}
+	var stored models.PaymentCard
+	if err := database.First(&stored, "id = ?", cardID).Error; err != nil {
+		t.Fatalf("read card: %v", err)
+	}
+	if stored.Status != string(CardCancelled) || stored.InUse {
+		t.Fatalf("retired card = %+v, want cancelled and not in use", stored)
+	}
+
+	pendingID := db.NewID("local_retire_pending")
+	now := time.Now()
+	pending := models.CardAllocation{
+		ID: pendingID, IdempotencyKey: pendingID, PaymentCardID: cardID, PoolID: poolID,
+		Provider: provider.ProviderName(), ProviderCardID: provider.fixedCardID,
+		UsageType: string(UsageOneTime), Status: string(AllocationReleased),
+		ProviderReleasePending: true, ProviderReleaseAction: ProviderReleaseActionCancel,
+		AllocatedAt: now, ReleasedAt: &now,
+	}
+	if err := database.Create(&pending).Error; err != nil {
+		t.Fatalf("create pending allocation: %v", err)
+	}
+	if err := service.RetireCardLocally(context.Background(), cardID); err != nil {
+		t.Fatalf("RetireCardLocally() pending error = %v", err)
+	}
+	if provider.cancelCalls.Load() != 0 {
+		t.Fatalf("RetireCardLocally called CancelCard after pending abort %d times", provider.cancelCalls.Load())
+	}
+	var storedPending models.CardAllocation
+	if err := database.First(&storedPending, "id = ?", pendingID).Error; err != nil {
+		t.Fatalf("read pending allocation: %v", err)
+	}
+	if storedPending.ProviderReleasePending || storedPending.ProviderReleaseAction != "" {
+		t.Fatalf("local retire left pending provider cancel: %+v", storedPending)
 	}
 }
 

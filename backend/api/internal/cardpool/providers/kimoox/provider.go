@@ -266,10 +266,11 @@ func (p *Provider) CreateCard(ctx context.Context, request cardpool.CreateCardRe
 		body["holderId"] = *holderID
 	}
 	if cardType == "PREPAID" {
-		if request.Amount <= 0 {
-			return cardpool.PaymentCard{}, cardpool.NewProviderError(providerName, "create_card", cardpool.CategoryInvalidRequest, false, false, errors.New("Kimoox PREPAID 开卡需要大于 0 的首充金额"))
+		amount, amountErr := p.prepaidRechargeAmount(request.Amount)
+		if amountErr != nil {
+			return cardpool.PaymentCard{}, cardpool.NewProviderError(providerName, "create_card", cardpool.CategoryInvalidRequest, false, false, amountErr)
 		}
-		body["rechargeAmount"] = formatAmount(request.Amount)
+		body["rechargeAmount"] = formatAmount(amount)
 	} else {
 		cardGroupID, groupErr := parseRequiredInt(p.value("kimoox_card_group_id", ""))
 		budgetID, budgetErr := parseRequiredInt(p.value("kimoox_budget_id", ""))
@@ -899,6 +900,24 @@ func parseKimooxTime(value string) (time.Time, bool) {
 		return time.Unix(unix, 0), true
 	}
 	return time.Time{}, false
+}
+
+func (p *Provider) prepaidRechargeAmount(requested float64) (float64, error) {
+	if requested > 0 {
+		return requested, nil
+	}
+	raw := ""
+	if p != nil {
+		raw = strings.TrimSpace(p.value("kimoox_prepaid_recharge_amount", "220"))
+	}
+	if raw == "" {
+		return 0, errors.New("Kimoox PREPAID 开卡需要大于 0 的首充金额，请在发卡配置中填写默认首充金额")
+	}
+	parsed, err := strconv.ParseFloat(raw, 64)
+	if err != nil || parsed <= 0 {
+		return 0, errors.New("Kimoox PREPAID 默认首充金额无效")
+	}
+	return parsed, nil
 }
 
 func parseOptionalInt(value string) *int64 {

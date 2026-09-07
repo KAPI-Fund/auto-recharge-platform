@@ -134,43 +134,22 @@ func TestRecoverStaleTaskCompensatesRemoteOneTimeCard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first recovery: %v", err)
 	}
-	if report.RunningExpired != 1 || report.ProviderReleaseAttempted != 1 || report.ProviderReleaseFailed != 1 || provider.cancels.Load() != 0 {
-		t.Fatalf("first recovery report=%+v cancels=%d", report, provider.cancels.Load())
+	if report.RunningExpired != 1 || report.ProviderReleaseAttempted != 0 || provider.cancels.Load() != 0 {
+		t.Fatalf("first recovery report=%+v cancels=%d, want no remote cancel for unsubmitted checkout", report, provider.cancels.Load())
 	}
-	var failedCard models.PaymentCard
-	if err := database.First(&failedCard, "id = ?", cardID).Error; err != nil {
-		t.Fatalf("read failed recovery card: %v", err)
+	var recoveredCard models.PaymentCard
+	if err := database.First(&recoveredCard, "id = ?", cardID).Error; err != nil {
+		t.Fatalf("read recovered card: %v", err)
 	}
-	if failedCard.Status != string(cardpool.CardFailed) || failedCard.InUse {
-		t.Fatalf("remote card became reusable after failed cancellation: %+v", failedCard)
+	if recoveredCard.Status != string(cardpool.CardActive) || recoveredCard.InUse {
+		t.Fatalf("unsubmitted recovered card = %+v, want active and not in use", recoveredCard)
 	}
 	var pending models.CardAllocation
 	if err := database.First(&pending, "id = ?", allocationID).Error; err != nil {
-		t.Fatalf("read pending recovery allocation: %v", err)
+		t.Fatalf("read recovered allocation: %v", err)
 	}
-	if !pending.ProviderReleasePending || pending.ProviderReleaseAction != cardpool.ProviderReleaseActionCancel {
-		t.Fatalf("pending release state = %+v", pending)
-	}
-
-	report, err = server.RecoverStaleRechargeTasks()
-	if err != nil {
-		t.Fatalf("retry recovery: %v", err)
-	}
-	if report.ProviderReleaseAttempted != 1 || report.ProviderReleaseSucceeded != 1 || provider.cancels.Load() != 1 {
-		t.Fatalf("retry recovery report=%+v cancels=%d", report, provider.cancels.Load())
-	}
-	var releasedCard models.PaymentCard
-	if err := database.First(&releasedCard, "id = ?", cardID).Error; err != nil {
-		t.Fatalf("read released recovery card: %v", err)
-	}
-	if releasedCard.Status != string(cardpool.CardCancelled) || releasedCard.InUse {
-		t.Fatalf("released remote card state = %+v", releasedCard)
-	}
-	if err := database.First(&pending, "id = ?", allocationID).Error; err != nil {
-		t.Fatalf("read completed recovery allocation: %v", err)
-	}
-	if pending.ProviderReleasePending || pending.ProviderReleasedAt == nil || pending.ProviderReleaseError != "" {
-		t.Fatalf("completed release state = %+v", pending)
+	if pending.ProviderReleasePending || pending.ProviderReleaseAction == cardpool.ProviderReleaseActionCancel {
+		t.Fatalf("unsubmitted recovery queued paid cancel: %+v", pending)
 	}
 }
 

@@ -19,8 +19,9 @@ func normalizeModernConfigValues(input map[string]string) (map[string]string, er
 		"emailSMTPHost": true, "emailSMTPPort": true, "emailSMTPUsername": true, "emailSMTPPassword": true,
 		"emailSMTPFrom": true, "emailSMTPFromName": true, "emailSMTPUseTLS": true, "emailSMTPTimeoutSeconds": true,
 		"cardPoolDefaultID": true, "cardPoolRouting": true, "cardPoolDefaultProvider": true, "cardPoolCardCreationMode": true,
-		"localTextEnabled": true,
-		"airwallexEnabled": true, "airwallexBaseURL": true, "airwallexClientID": true, "airwallexAPIKey": true,
+		"cardPoolCancelAfterPayment": true,
+		"localTextEnabled":           true,
+		"airwallexEnabled":           true, "airwallexBaseURL": true, "airwallexClientID": true, "airwallexAPIKey": true,
 		"airwallexPrimaryCurrency": true, "airwallexCardPurpose": true, "airwallexCardType": true,
 		"airwallexFormFactor": true, "airwallexActivateOnIssue": true, "airwallexCreatedBy": true,
 		"airwallexCardholderID": true, "airwallexWebhookSecret": true, "airwallexWebhookToleranceSeconds": true,
@@ -37,7 +38,7 @@ func normalizeModernConfigValues(input map[string]string) (map[string]string, er
 		"dogpayPrivateKey": true, "dogpayWebhookSecret": true, "dogpayChannelID": true, "dogpayCardholderID": true,
 		"dogpayEntityID": true, "dogpayCardType": true, "dogpayBudgetID": true, "dogpayVelocityAmountLimit": true, "dogpayWebhookToleranceSeconds": true,
 		"kimooxEnabled": true, "kimooxBaseURL": true, "kimooxAPIKey": true, "kimooxAPISecret": true,
-		"kimooxWebhookSecret": true, "kimooxCardBINIDs": true, "kimooxCardType": true,
+		"kimooxWebhookSecret": true, "kimooxCardBINIDs": true, "kimooxCardType": true, "kimooxPrepaidRechargeAmount": true,
 		"kimooxCardholderID": true, "kimooxHolderID": true, "kimooxCardGroupID": true, "kimooxBudgetID": true,
 		"kimooxWebhookToleranceSeconds": true, "kimooxApplyPollAttempts": true, "kimooxApplyPollIntervalSeconds": true,
 	}
@@ -49,7 +50,7 @@ func normalizeModernConfigValues(input map[string]string) (map[string]string, er
 		"email_smtp_timeout_seconds", "email_site_name", "card_pool_default_id", "card_pool_routing", "card_pool_default_provider",
 		"card_provider_local_text_enabled", "card_provider_airwallex_enabled", "card_provider_stripe_issuing_enabled",
 		"card_provider_photonpay_enabled", "card_provider_dogpay_enabled",
-		"card_provider_kimoox_enabled", "card_pool_card_creation_mode",
+		"card_provider_kimoox_enabled", "card_pool_card_creation_mode", "card_pool_cancel_after_payment",
 		"airwallex_base_url", "airwallex_client_id", "airwallex_api_key", "airwallex_primary_currency",
 		"airwallex_card_purpose", "airwallex_card_type", "airwallex_form_factor", "airwallex_activate_on_issue",
 		"airwallex_created_by", "airwallex_cardholder_id", "airwallex_webhook_secret", "airwallex_webhook_tolerance_seconds",
@@ -62,6 +63,7 @@ func normalizeModernConfigValues(input map[string]string) (map[string]string, er
 		"dogpay_base_url", "dogpay_appid", "dogpay_secret", "dogpay_private_key", "dogpay_webhook_secret", "dogpay_channel_id",
 		"dogpay_cardholder_id", "dogpay_entity_id", "dogpay_card_type", "dogpay_budget_id", "dogpay_velocity_amount_limit", "dogpay_webhook_tolerance_seconds",
 		"kimoox_base_url", "kimoox_api_key", "kimoox_api_secret", "kimoox_webhook_secret", "kimoox_card_bin_ids", "kimoox_card_type",
+		"kimoox_prepaid_recharge_amount",
 		"kimoox_cardholder_id", "kimoox_holder_id", "kimoox_card_group_id", "kimoox_budget_id", "kimoox_webhook_tolerance_seconds",
 		"kimoox_apply_poll_attempts", "kimoox_apply_poll_interval_seconds",
 		"stripe_secret_key", "stripe_webhook_secret", "store_debug_mode", "stripe_success_url", "stripe_cancel_url", "public_base_url",
@@ -79,7 +81,8 @@ func normalizeModernConfigValues(input map[string]string) (map[string]string, er
 		"emailSMTPUsername": "email_smtp_username", "emailSMTPPassword": "email_smtp_password", "emailSMTPFrom": "email_smtp_from",
 		"emailSMTPFromName": "email_smtp_from_name", "emailSMTPUseTLS": "email_smtp_use_tls", "emailSMTPTimeoutSeconds": "email_smtp_timeout_seconds",
 		"cardPoolDefaultID": "card_pool_default_id", "cardPoolRouting": "card_pool_routing", "cardPoolDefaultProvider": "card_pool_default_provider", "cardPoolCardCreationMode": "card_pool_card_creation_mode",
-		"localTextEnabled": "card_provider_local_text_enabled", "airwallexEnabled": "card_provider_airwallex_enabled",
+		"cardPoolCancelAfterPayment": "card_pool_cancel_after_payment",
+		"localTextEnabled":           "card_provider_local_text_enabled", "airwallexEnabled": "card_provider_airwallex_enabled",
 		"airwallexBaseURL": "airwallex_base_url", "airwallexClientID": "airwallex_client_id", "airwallexAPIKey": "airwallex_api_key",
 		"airwallexPrimaryCurrency": "airwallex_primary_currency", "airwallexCardPurpose": "airwallex_card_purpose",
 		"airwallexCardType": "airwallex_card_type", "airwallexFormFactor": "airwallex_form_factor", "airwallexActivateOnIssue": "airwallex_activate_on_issue",
@@ -101,7 +104,8 @@ func normalizeModernConfigValues(input map[string]string) (map[string]string, er
 		"dogpayVelocityAmountLimit": "dogpay_velocity_amount_limit", "dogpayWebhookToleranceSeconds": "dogpay_webhook_tolerance_seconds",
 		"kimooxEnabled": "card_provider_kimoox_enabled", "kimooxBaseURL": "kimoox_base_url", "kimooxAPIKey": "kimoox_api_key",
 		"kimooxAPISecret": "kimoox_api_secret", "kimooxWebhookSecret": "kimoox_webhook_secret", "kimooxCardBINIDs": "kimoox_card_bin_ids",
-		"kimooxCardType": "kimoox_card_type", "kimooxCardholderID": "kimoox_cardholder_id", "kimooxHolderID": "kimoox_holder_id",
+		"kimooxCardType": "kimoox_card_type", "kimooxPrepaidRechargeAmount": "kimoox_prepaid_recharge_amount",
+		"kimooxCardholderID": "kimoox_cardholder_id", "kimooxHolderID": "kimoox_holder_id",
 		"kimooxCardGroupID": "kimoox_card_group_id", "kimooxBudgetID": "kimoox_budget_id",
 		"kimooxWebhookToleranceSeconds": "kimoox_webhook_tolerance_seconds", "kimooxApplyPollAttempts": "kimoox_apply_poll_attempts",
 		"kimooxApplyPollIntervalSeconds": "kimoox_apply_poll_interval_seconds",
@@ -134,7 +138,8 @@ func normalizeModernConfigValue(key, value string) (string, error) {
 	switch key {
 	case "email_enabled", "email_notify_purchase", "email_notify_redeem", "email_smtp_use_tls", "maintenance_mode", "maintenance_mode_drain",
 		"card_provider_local_text_enabled", "card_provider_airwallex_enabled", "card_provider_stripe_issuing_enabled",
-		"card_provider_photonpay_enabled", "card_provider_dogpay_enabled", "card_provider_kimoox_enabled", "airwallex_activate_on_issue":
+		"card_provider_photonpay_enabled", "card_provider_dogpay_enabled", "card_provider_kimoox_enabled", "airwallex_activate_on_issue",
+		"card_pool_cancel_after_payment":
 		if value != "0" && value != "1" && !strings.EqualFold(value, "true") && !strings.EqualFold(value, "false") {
 			return "", fmt.Errorf("%s 必须是布尔值", key)
 		}
@@ -211,6 +216,12 @@ func normalizeModernConfigValue(key, value string) (string, error) {
 			return "", fmt.Errorf("kimoox_card_type 仅支持 PREPAID、BUDGET")
 		}
 		return value, nil
+	case "kimoox_prepaid_recharge_amount":
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err != nil || parsed <= 0 || parsed > 100000 {
+			return "", fmt.Errorf("kimoox_prepaid_recharge_amount 必须是大于 0 且不超过 100000 的金额")
+		}
+		return strconv.FormatFloat(parsed, 'f', -1, 64), nil
 	case "airwallex_form_factor":
 		value = strings.ToUpper(value)
 		if value != "VIRTUAL" && value != "PHYSICAL" {

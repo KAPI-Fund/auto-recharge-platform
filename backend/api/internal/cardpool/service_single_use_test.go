@@ -11,7 +11,7 @@ func TestNormalizeRechargeUsageAlwaysReturnsOneTime(t *testing.T) {
 }
 
 func TestSingleUseReleaseCancelsProviderCardAfterUsage(t *testing.T) {
-	if got := releaseActionForProvider(string(UsageOneTime), true, true, true); got != ProviderReleaseActionCancel {
+	if got := releaseActionForProvider(string(UsageOneTime), true, true, true, true, true); got != ProviderReleaseActionCancel {
 		t.Fatalf("release action = %q, want %q", got, ProviderReleaseActionCancel)
 	}
 }

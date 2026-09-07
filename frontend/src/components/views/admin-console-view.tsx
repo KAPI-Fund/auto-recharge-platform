@@ -218,6 +218,7 @@ const providerConfigKeys = [
   "card_pool_routing",
   "card_pool_default_provider",
   "card_pool_card_creation_mode",
+  "card_pool_cancel_after_payment",
   "card_provider_local_text_enabled",
   "card_provider_airwallex_enabled",
   "card_provider_stripe_issuing_enabled",
@@ -277,6 +278,7 @@ const providerConfigKeys = [
   "kimoox_webhook_secret",
   "kimoox_card_bin_ids",
   "kimoox_card_type",
+  "kimoox_prepaid_recharge_amount",
   "kimoox_cardholder_id",
   "kimoox_holder_id",
   "kimoox_card_group_id",
@@ -2238,6 +2240,14 @@ function ConfigPanel({
             <p className="config-help">POOL_ONLY 使用银行卡池中已有卡；CREATE_ON_DEMAND 每个充值任务先向当前 Provider 申请一张新卡，再交给 Worker 支付。</p>
           </label>
         </div>
+        <div className="config-toggle-block">
+          <ConfigToggle
+            label="支付完成后调用 API 销卡"
+            checked={["1", "true"].includes(field("card_pool_cancel_after_payment", "1"))}
+            onChange={(checked) => update("card_pool_cancel_after_payment", checked ? "1" : "0")}
+            description="开启后，支付成功会调用 Provider 销卡接口（可能产生费用）。关闭后，支付成功只把卡池卡片标为已销毁，不调用销卡 API。无论开关，支付失败都只本地报废，不调用销卡 API。"
+          />
+        </div>
         <div className="config-toggle-list">
           <ConfigToggle label="启用 LOCAL_TEXT" checked={providerIsEnabled("LOCAL_TEXT")} disabled={defaultProvider === "LOCAL_TEXT"} onChange={(checked) => updateProviderEnabled("LOCAL_TEXT", checked)} description={providerDescription("LOCAL_TEXT", "兼容现有 TXT / CSV 导入卡池；卡片在银行卡池页面管理。")} />
           <ConfigToggle label="启用 KIMOOX" checked={providerIsEnabled(visibleCardProvider)} disabled={defaultProvider === visibleCardProvider} onChange={(checked) => updateProviderEnabled(visibleCardProvider, checked)} description={providerDescription(visibleCardProvider, "Kimoox VCC Open API 适配器，建议先使用文档要求的环境和卡 BIN。")} />
@@ -2445,6 +2455,7 @@ function ConfigPanel({
               <p className="config-help">保存后每次开卡会从已选 BIN 中稳定选择一个；同一幂等任务重试不会随机换 BIN。当前仅支持新的多 BIN 配置字段。</p>
             </label>
             <label>卡类型<select value={field("kimoox_card_type", "PREPAID")} onChange={(event) => update("kimoox_card_type", event.target.value)} className="asset-input"><option value="PREPAID">PREPAID 储值卡</option><option value="BUDGET">BUDGET 预算卡</option></select><p className="config-help">PREPAID 需要首充金额；BUDGET 需要同时填写 Card Group ID 和 Budget ID。</p></label>
+            <label>PREPAID 默认首充金额<input type="number" min={0.01} max={100000} step="0.01" value={field("kimoox_prepaid_recharge_amount", "220")} onChange={(event) => update("kimoox_prepaid_recharge_amount", event.target.value)} className="asset-input" /><p className="config-help">自动开卡，以及手动开卡未填金额时使用。按最大 Pro 20x 建议 220（USD）。</p></label>
             <label>Cardholder ID（可选）<input value={field("kimoox_cardholder_id")} onChange={(event) => update("kimoox_cardholder_id", event.target.value)} className="asset-input" placeholder="数字 ID；也可使用 Holder ID" /></label>
             <label>Holder ID（可选）<input value={field("kimoox_holder_id")} onChange={(event) => update("kimoox_holder_id", event.target.value)} className="asset-input" /></label>
             <label>Card Group ID（BUDGET 必填）<input disabled={field("kimoox_card_type", "PREPAID") !== "BUDGET"} value={field("kimoox_card_group_id")} onChange={(event) => update("kimoox_card_group_id", event.target.value)} className="asset-input" /></label>
@@ -3444,6 +3455,8 @@ function CardsPanel({
   const [providerRows, setProviderRows] = useState<Row[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [virtualDeleteRow, setVirtualDeleteRow] = useState<Row | null>(null);
+  const [deletingCard, setDeletingCard] = useState(false);
   const [createForm, setCreateForm] = useState({
     poolId: "",
     provider: "",
@@ -3531,14 +3544,31 @@ function CardsPanel({
     return providerRows.filter((provider) => text(provider, "provider").toUpperCase() === visibleCardProvider && bool(provider, "enabled") && bool(provider, "canCreate") && (configuredProviders.size === 0 || configuredProviders.has(text(provider, "provider").toUpperCase())));
   };
   const creatableProviders = providersForPool(createForm.poolId);
-  const remove = async (row: Row) => {
-    if (!(await confirm("确定删除此银行卡吗？", "删除银行卡"))) return;
+  const isVirtualProviderCard = (row: Row) => {
+    const provider = text(row, "provider", "LOCAL_TEXT").toUpperCase();
+    const providerCardId = text(row, "provider_card_id", text(row, "providerCardId"));
+    return provider !== "" && provider !== "LOCAL_TEXT" && Boolean(providerCardId);
+  };
+  const executeDelete = async (row: Row, cancelProvider: boolean) => {
+    setDeletingCard(true);
     try {
-      await deleteCard(text(row, "id"));
+      await deleteCard(text(row, "id"), { cancelProvider });
+      setVirtualDeleteRow(null);
+      setNotice(cancelProvider ? "已远程销卡，卡片已标记为已销毁" : "已删除本地记录，未调用远程销卡");
       await refresh();
     } catch (reason) {
       setError(errorMessage(reason));
+    } finally {
+      setDeletingCard(false);
     }
+  };
+  const remove = async (row: Row) => {
+    if (isVirtualProviderCard(row)) {
+      setVirtualDeleteRow(row);
+      return;
+    }
+    if (!(await confirm("确定从卡池删除此银行卡吗？", "删除银行卡"))) return;
+    await executeDelete(row, false);
   };
   return (
     <div className="cards-page">
@@ -3619,6 +3649,45 @@ function CardsPanel({
           ]}
         />
       </Panel>
+      {virtualDeleteRow ? (
+        <div
+          className="admin-confirm-overlay is-open"
+          role="presentation"
+          aria-hidden="false"
+          onClick={() => {
+            if (!deletingCard) setVirtualDeleteRow(null);
+          }}
+        >
+          <div
+            className="admin-confirm-dialog admin-confirm-dialog-wide"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="virtual-card-delete-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div id="virtual-card-delete-title" className="admin-confirm-title">
+              删除虚拟卡
+            </div>
+            <p className="admin-confirm-text">
+              {`此卡由 ${text(virtualDeleteRow, "provider")} 开出（${text(virtualDeleteRow, "card_number", "•••• " + text(virtualDeleteRow, "last4"))}）。
+远程销卡会调用 Provider API，可能产生费用。请选择删除方式：
+• 仅删除本地记录：卡池不再使用这张卡，远程卡仍保留，不收费
+• 同时调用 API 销卡：会向发卡方销卡，可能产生费用`}
+            </p>
+            <div className="admin-confirm-actions">
+              <Button variant="outline" disabled={deletingCard} onClick={() => setVirtualDeleteRow(null)}>
+                取消
+              </Button>
+              <Button variant="outline" disabled={deletingCard} onClick={() => void executeDelete(virtualDeleteRow, false)}>
+                仅删除本地记录
+              </Button>
+              <Button variant="danger" disabled={deletingCard} onClick={() => void executeDelete(virtualDeleteRow, true)}>
+                同时调用 API 销卡（收费）
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
