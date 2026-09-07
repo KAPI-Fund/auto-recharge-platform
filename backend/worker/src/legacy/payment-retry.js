@@ -167,6 +167,7 @@ async function executePaymentWithRetry(page, options) {
 
         let cardHandled = false;
         let paymentSubmitted = false;
+        const allocationId = String(card.allocationId || card.allocation_id || '').trim();
 
         try {
             const paymentResult = await completeStripeCardPayment(page, cardInfo, address, {
@@ -228,7 +229,6 @@ async function executePaymentWithRetry(page, options) {
                 progress(`FAILURE_SCREENSHOT: ${paymentResult.screenshot}`);
             }
 
-            const allocationId = String(card.allocationId || card.allocation_id || '').trim();
             const declined = paymentSubmitted && (paymentResult.declined || isPaymentDeclined(lastError));
             const failureCode = declined
                 ? 'card_declined'
@@ -303,27 +303,16 @@ async function executePaymentWithRetry(page, options) {
                 error_message: lastError
             });
 
-            if (!paymentSubmitted) {
-                // No payment request was submitted. Keep the card usable and
-                // only release the allocation; do not record usage or cancel
-                // the provider card.
-                const released = await releaseAttemptReservation(card);
-                cardHandled = released.accepted;
-            } else {
-                // A click/request happened but no final success or decline was
-                // observed. Do not mark the card as failed or cancel it: the
-                // payment outcome is unknown and must remain reviewable.
-                const recorded = await store.recordCardFailure(
-                    card.id,
-                    allocationId,
-                    'payment_unknown',
-                    lastError
-                );
-                cardHandled = recorded?.ok !== false;
-            }
+            // No confirmed success or decline: hCaptcha / 表单失败 / 提交后无终态
+            // 都不能把卡留在 IN_USE。扣款未确认时只释放预留，不记使用、不销卡。
+            try {
+                await store.recordCardFailure(card.id, allocationId, automationFailureCode, lastError);
+            } catch (_) { /* diagnostics only */ }
+            const released = await releaseAttemptReservation(card);
+            cardHandled = released.accepted;
 
             progress(paymentSubmitted
-                ? '支付已提交但未确认最终结果，卡片保留待核查'
+                ? '支付未确认最终结果，已释放卡片预留'
                 : '支付尚未提交，已释放卡片预留');
             return {
                 success: false,
@@ -335,15 +324,8 @@ async function executePaymentWithRetry(page, options) {
             };
         } finally {
 			if (card?.id && !cardHandled) {
-				if (paymentSubmitted) {
-					try {
-						await store.recordCardFailure(card.id, allocationId, 'payment_unknown', '支付流程异常中断');
-						cardHandled = true;
-					} catch (_) { /* preserve the original payment failure */ }
-				} else {
-					const released = await releaseAttemptReservation(card);
-					cardHandled = released.accepted;
-				}
+				const released = await releaseAttemptReservation(card);
+				cardHandled = released.accepted;
 			}
         }
     }

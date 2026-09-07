@@ -194,181 +194,19 @@ async function discoverCardInputs(page, timeout = 45000) {
     return null;
 }
 
-/**
- * 卡号输入是否已在页面/iframe 中可见（判断是否还要展开 Card 支付方式）
- */
-async function hasVisibleCardNumberInputs(page) {
-    const cardSelectors = [
-        'input[autocomplete="cc-number"]',
-        'input[name="cardnumber"]',
-        'input[name="number"]',
-        'input[placeholder*="1234" i]',
-        'input[aria-label*="Card number" i]',
-        'input[data-elements-stable-field-name="cardNumber"]'
-    ];
-    const contexts = [page, ...page.frames().filter((f) => f !== page.mainFrame())];
-    for (const ctx of contexts) {
-        for (const sel of cardSelectors) {
-            try {
-                const el = ctx.locator(sel).first();
-                if (await el.isVisible({ timeout: 250 }).catch(() => false)) {
-                    return true;
-                }
-            } catch (_) { /* next */ }
-        }
-    }
-    // 单 iframe 多 input（OpenAI custom checkout 常见）
-    try {
-        const iframeCount = await page.locator('iframe').count();
-        for (let i = 0; i < iframeCount; i += 1) {
-            const fl = page.frameLocator('iframe').nth(i);
-            const inputs = fl.locator('input:not([type="hidden"])');
-            const count = await inputs.count().catch(() => 0);
-            if (count >= 3) {
-                const first = inputs.first();
-                if (await first.isVisible({ timeout: 300 }).catch(() => false)) {
-                    return true;
-                }
-            }
-        }
-    } catch (_) { /* ignore */ }
-    return false;
-}
-
-/**
- * 多国家 Checkout：UPI / Apple Pay / 本地方式默认展开时，卡表单可能折叠。
- * 扫描页面元素并点击 Card / 信用卡 入口，兼容 IN/PH/SG/US 等布局。
- */
-async function ensureCardPaymentMethodSelected(page, { force = false } = {}) {
-    if (!force && await hasVisibleCardNumberInputs(page)) {
-        console.log('[Stripe] 卡号输入已可见，无需切换支付方式');
-        return { ok: true, alreadyOpen: true };
-    }
-
-    console.log('[Stripe] Step 1: 扫描支付方式并切换到 Card/信用卡...');
-
-    // 记录当前可见的支付方式文案，方便排查各国差异
-    try {
-        const labels = await page.evaluate(() => {
-            const re = /^(card|credit|debit|upi|apple\s*pay|google\s*pay|paypal|ideal|bancontact|klarna|affirm|link|alipay|wechat|信用卡|银行卡|借记卡)$/i;
-            const out = [];
-            const walk = (root) => {
-                if (!root) return;
-                const nodes = root.querySelectorAll
-                    ? root.querySelectorAll('button, [role="button"], [role="radio"], [role="tab"], label, a, div[class*="Payment"], span')
-                    : [];
-                for (const el of nodes) {
-                    const t = String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-                    if (!t || t.length > 40) continue;
-                    if (re.test(t) || /card|upi|apple pay|google pay|credit|debit|信用卡|银行卡/i.test(t)) {
-                        if (!out.includes(t)) out.push(t);
-                    }
-                }
-            };
-            walk(document);
-            return out.slice(0, 20);
-        }).catch(() => []);
-        if (labels.length) {
-            console.log(`[Stripe] 页面支付方式候选: ${labels.join(' | ')}`);
-        }
-    } catch (_) { /* ignore */ }
-
-    const cardClickTargets = [
-        // 精确短标签（OpenAI IN：折叠行「Card」）
-        () => page.getByRole('button', { name: /^Card$/i }).first(),
-        () => page.getByRole('radio', { name: /^Card$/i }).first(),
-        () => page.getByRole('tab', { name: /^Card$/i }).first(),
-        () => page.locator('[role="button"]').filter({ hasText: /^Card$/i }).first(),
-        () => page.locator('button').filter({ hasText: /^Card$/i }).first(),
-        () => page.getByText(/^Card$/i).first(),
-        // 英文完整
-        () => page.getByRole('button', { name: /credit or debit card/i }).first(),
-        () => page.getByRole('button', { name: /debit or credit card/i }).first(),
-        () => page.getByRole('button', { name: /^Cards?$/i }).first(),
-        () => page.getByText(/Credit or debit card/i).first(),
-        // 中文
-        () => page.getByRole('button', { name: /信用卡|银行卡|借记卡/i }).first(),
-        () => page.getByText(/^信用卡$/).first(),
-        () => page.getByText(/^银行卡$/).first(),
-        // data-testid / 通用
-        () => page.locator('[data-testid="card-tab"], [data-testid="CARD-tab"], [data-testid="payment-method-card"]').first(),
-        () => page.locator('[data-payment-method-type="card"], [data-method="card"], [value="card"]').first(),
-        // 图标旁文字行：含 Card 的可点击容器
-        () => page.locator('div,button,label').filter({ hasText: /^[\s\S]{0,8}Card[\s\S]{0,8}$/i }).first(),
-    ];
-
-    for (const getEl of cardClickTargets) {
-        try {
-            const el = getEl();
-            if (!(await el.isVisible({ timeout: 700 }).catch(() => false))) continue;
-            await el.scrollIntoViewIfNeeded().catch(() => {});
-            await el.click({ timeout: 2500 });
-            console.log('[Stripe] ✅ 已点击 Card/信用卡 支付方式入口');
-            await page.waitForTimeout(1200);
-            if (await hasVisibleCardNumberInputs(page)) {
-                return { ok: true, clicked: true };
-            }
-            // 有的布局要点两次（先展开列表再选中）
-            await el.click({ timeout: 1500 }).catch(() => {});
-            await page.waitForTimeout(800);
-            if (await hasVisibleCardNumberInputs(page)) {
-                return { ok: true, clicked: true };
-            }
-        } catch (_) { /* try next strategy */ }
-    }
-
-    // 在 Stripe payment iframe 内再找一次
-    try {
-        const iframeCount = await page.locator('iframe').count();
-        for (let i = 0; i < iframeCount; i += 1) {
-            const fl = page.frameLocator('iframe').nth(i);
-            const candidates = [
-                fl.getByRole('button', { name: /^Card$/i }),
-                fl.getByRole('radio', { name: /card/i }),
-                fl.getByText(/^Card$/i),
-                fl.getByText(/Credit or debit card/i),
-                fl.locator('[data-testid*="card" i]'),
-            ];
-            for (const el of candidates) {
-                try {
-                    const target = el.first();
-                    if (!(await target.isVisible({ timeout: 400 }).catch(() => false))) continue;
-                    await target.click({ timeout: 2000 });
-                    console.log(`[Stripe] ✅ 已在 iframe#${i} 内点击 Card`);
-                    await page.waitForTimeout(1000);
-                    if (await hasVisibleCardNumberInputs(page)) {
-                        return { ok: true, clicked: true, via: `iframe-${i}` };
-                    }
-                } catch (_) { /* next */ }
-            }
-        }
-    } catch (_) { /* ignore */ }
-
-    // 点 OR 分隔线有时能展开下方 Card（旧逻辑保留）
-    const orSep = page.getByText(/^OR$/i).first();
-    if (await orSep.isVisible({ timeout: 500 }).catch(() => false)) {
-        await orSep.click({ timeout: 1000 }).catch(() => {});
-        await page.waitForTimeout(600);
-    }
-
-    if (await hasVisibleCardNumberInputs(page)) {
-        return { ok: true, alreadyOpen: true };
-    }
-
-    console.warn('[Stripe] ⚠️ 未确认切到 Card：仍可能找不到卡号框（页面或仅有 UPI/本地支付）');
-    return { ok: false };
-}
-
 async function prepareCheckoutCardSection(page) {
     await page.waitForURL(/checkout\/openai_llc|pay\.openai|checkout\.stripe|stripe\.com/i, { timeout: 5000 }).catch(() => {});
-    await page.getByText(/Configure your plan|Card number|Pay with|Subscribe|UPI|Card/i).first()
-        .waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
-
-    await ensureCardPaymentMethodSelected(page);
+    await page.getByText(/Configure your plan|Card number|Pay with/i).first()
+        .waitFor({ state: 'visible', timeout: 3000 }).catch(() => {});
 
     const cardLabel = page.getByText(/^Card number$/i).first();
     if (await cardLabel.isVisible({ timeout: 800 }).catch(() => false)) {
         await cardLabel.scrollIntoViewIfNeeded().catch(() => {});
+    }
+
+    const orSep = page.getByText(/^OR$/i).first();
+    if (await orSep.isVisible({ timeout: 800 }).catch(() => false)) {
+        await orSep.click({ timeout: 1000 }).catch(() => {});
     }
 }
 
@@ -627,7 +465,6 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
     const isCardRetry = cardAttempt > 1;
     let holderName = String(options.holderName || '').trim();
     let checkoutDue = null;
-    let paymentSubmitted = false;
 
     try {
         if (isCardRetry) {
@@ -639,7 +476,7 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
             const retryFill = await fillCardFieldsOpenAiCheckout(page, cardInfo, ELEMENT_TIMEOUT);
             if (!retryFill.ok) {
                 const screenshotPath = await saveDebugScreenshot(page, 'card_fields_not_found');
-                return { success: false, error: retryFill.error || '无法定位信用卡输入框', screenshot: screenshotPath, paymentSubmitted };
+                return { success: false, error: retryFill.error || '无法定位信用卡输入框', screenshot: screenshotPath };
             }
         } else {
         console.log('[Stripe] Step 0: 等待 Checkout 支付页就绪...');
@@ -656,38 +493,54 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
                 return {
                     success: false,
                     error: 'Checkout 支付表单未能加载',
-                    screenshot: screenshotPath,
-                    paymentSubmitted
+                    screenshot: screenshotPath
                 };
             }
             return {
                 success: false,
                 error: buildCaptchaRequiredError(),
                 screenshot: screenshotPath,
-                captchaRequired: true,
-                paymentSubmitted
+                captchaRequired: true
             };
         }
-        // 多国家：可能默认 UPI/Apple Pay/本地方式，先展开 Card 再填
         await prepareCheckoutCardSection(page);
-        await page.waitForTimeout(800);
-        // 填卡前再强制确认一次（OpenAI IN 等布局常折叠 Card）
-        await ensureCardPaymentMethodSelected(page, { force: true });
-        await page.waitForTimeout(600);
+        await page.waitForTimeout(1000);
 
         const openAiCheckout = isOpenAiCustomCheckout(page);
+        if (!openAiCheckout) {
+            // 仅 Stripe hosted 页需要选择支付方式 tab
+            console.log('[Stripe] Step 1: 选择信用卡支付方式...');
+            try {
+                const cardMethodSelectors = [
+                    '[data-testid="card-tab"]',
+                    '[data-testid="CARD-tab"]',
+                    'button:has-text("Credit or debit card")',
+                    'button:has-text("信用卡")',
+                    '[data-testid="payment-method-card"]'
+                ];
+                for (const sel of cardMethodSelectors) {
+                    try {
+                        const el = page.locator(sel).first();
+                        if (await el.isVisible({ timeout: 1500 })) {
+                            await el.click();
+                            console.log(`[Stripe] ✅ 已选择信用卡支付方式 (${sel})`);
+                            break;
+                        }
+                    } catch (_) { /* next */ }
+                }
+            } catch (e) {
+                console.log('[Stripe] 支付方式选择跳过:', e.message);
+            }
+            await page.waitForTimeout(800);
+        } else {
+            console.log('[Stripe] OpenAI checkout 页面，跳过支付方式选择，直接填卡');
+        }
 
         console.log('[Stripe] Step 2: 填写信用卡字段（iframe 自动识别）...');
-        let fillResult = await fillCardFieldsOpenAiCheckout(page, cardInfo, Math.min(ELEMENT_TIMEOUT, 25000));
-        if (!fillResult.ok) {
-            console.warn('[Stripe] 首次填卡失败，重新扫描并点击 Card 后重试…');
-            await ensureCardPaymentMethodSelected(page, { force: true });
-            await page.waitForTimeout(1000);
-            fillResult = await fillCardFieldsOpenAiCheckout(page, cardInfo, ELEMENT_TIMEOUT);
-        }
+        const fillResult = await fillCardFieldsOpenAiCheckout(page, cardInfo, ELEMENT_TIMEOUT);
         if (!fillResult.ok) {
             const screenshotPath = await saveDebugScreenshot(page, 'card_fields_not_found');
-            return { success: false, error: fillResult.error || '无法定位信用卡输入框', screenshot: screenshotPath, paymentSubmitted };
+            return { success: false, error: fillResult.error || '无法定位信用卡输入框', screenshot: screenshotPath };
         }
 
         // 离开卡号 iframe，点击账单区确保主文档获得焦点
@@ -709,8 +562,7 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
                 return {
                     success: false,
                     error: billingResult.error || '账单地址填写失败',
-                    screenshot: screenshotPath,
-                    paymentSubmitted
+                    screenshot: screenshotPath
                 };
             }
             if (billingResult.dueAmount) {
@@ -798,7 +650,6 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
         }
 
         const payResult = await finalizeCheckoutPayment(page, holderName);
-        paymentSubmitted = payResult.paymentSubmitted === true;
         if (checkoutDue?.amount) {
             payResult.dueAmount = checkoutDue.amount;
             payResult.dueCurrency = checkoutDue.currency;
@@ -808,7 +659,7 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
     } catch (error) {
         console.error(`[Stripe] ❌ 支付流程异常: ${error.message}`);
         const screenshotPath = await saveDebugScreenshot(page, 'payment_exception');
-        return { success: false, error: error.message, screenshot: screenshotPath, paymentSubmitted };
+        return { success: false, error: error.message, screenshot: screenshotPath };
     }
 }
 
@@ -1006,46 +857,44 @@ async function finalizeCheckoutPayment(page, holderName) {
     const submitted = await clickCheckoutSubmitButton(page);
     if (!submitted) {
         const screenshotPath = await saveDebugScreenshot(page, 'submit_not_found');
-        return { success: false, error: '无法找到提交/支付按钮', screenshot: screenshotPath, paymentSubmitted: false };
+        return { success: false, error: '无法找到提交/支付按钮', screenshot: screenshotPath };
     }
-
-    const withSubmitted = (result) => ({ ...(result || {}), paymentSubmitted: true });
 
     const postResult = await handlePostSubmitPhase(page);
     if (postResult.action === 'declined') {
-        return withSubmitted(buildDeclinedPaymentResult(page, postResult.declineMsg, postResult.screenshot));
+        return buildDeclinedPaymentResult(page, postResult.declineMsg, postResult.screenshot);
     }
     if (postResult.action === 'captcha_failed') {
-        return withSubmitted({
+        return {
             success: false,
             error: postResult.error,
             screenshot: postResult.screenshot,
             captchaRequired: true
-        });
+        };
     }
     if (postResult.action === 'success') {
         console.log('[Stripe] ✅ 支付成功！');
         const screenshotPath = await saveDebugScreenshot(page, 'payment_success');
-        return withSubmitted({ success: true, holderName, screenshot: screenshotPath });
+        return { success: true, holderName, screenshot: screenshotPath };
     }
 
     const paymentOutcome = await waitForPaymentResult(page, holderName);
     if (paymentOutcome.success) {
         console.log('[Stripe] ✅ 支付成功！');
-        return withSubmitted({
+        return {
             success: true,
             holderName: paymentOutcome.holderName,
             screenshot: paymentOutcome.screenshot
-        });
+        };
     }
     if (paymentOutcome.error && PAYMENT_DECLINE_PATTERNS.some((re) => re.test(paymentOutcome.error))) {
-        return withSubmitted({
+        return {
             ...paymentOutcome,
             declined: true,
             canRetryCard: true
-        });
+        };
     }
-    return withSubmitted(paymentOutcome);
+    return paymentOutcome;
 }
 
 /**
@@ -2962,8 +2811,6 @@ module.exports = {
     fillOpenAiCheckoutBilling,
     discoverCardInputs,
     prepareCheckoutCardSection,
-    ensureCardPaymentMethodSelected,
-    hasVisibleCardNumberInputs,
     readCheckoutDueAmount,
     estimateTaxFreeAmount,
     waitForCheckoutTaxRecalculation,

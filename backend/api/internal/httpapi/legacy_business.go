@@ -1128,7 +1128,7 @@ func (s *Server) legacyCards(c *gin.Context) {
 	now := time.Now()
 	for _, row := range rows {
 		isCooldown := cardIsCoolingDown(row, now)
-		items = append(items, gin.H{"id": row.ID, "card_number": maskedCardNumber(row.Last4), "card_expiry": maskedCardExpiry, "card_cvc": maskedCardCVC, "last4": row.Last4, "card_holder": row.Holder, "payment_holder_name": row.PaymentHolderName, "payment_address_line1": row.PaymentAddressLine1, "payment_address_city": row.PaymentAddressCity, "payment_address_state": row.PaymentAddressState, "payment_address_postal": row.PaymentAddressPostal, "payment_address_id": row.PaymentAddressID, "is_active": boolToInt(row.Active), "usage_count": row.UsageCount, "daily_usage_count": row.DailyUsageCount, "last_used_at": row.LastUsedAt, "last_used_at_text": legacyOptionalTimeString(row.LastUsedAt), "status": row.Status, "status_label": cardStatusLabel(row.Status, isCooldown), "status_tone": cardStatusTone(row.Status, isCooldown), "is_cooldown": isCooldown, "is_available": cardIsAvailable(row, now), "is_exhausted": cardIsExhausted(row), "cooldown_until": row.CooldownUntil})
+		items = append(items, gin.H{"id": row.ID, "card_number": maskedCardNumber(row.Last4), "card_expiry": maskedCardExpiry, "card_cvc": maskedCardCVC, "last4": row.Last4, "card_holder": row.Holder, "payment_holder_name": row.PaymentHolderName, "payment_address_line1": row.PaymentAddressLine1, "payment_address_city": row.PaymentAddressCity, "payment_address_state": row.PaymentAddressState, "payment_address_postal": row.PaymentAddressPostal, "payment_address_id": row.PaymentAddressID, "is_active": boolToInt(row.Active), "usage_count": row.UsageCount, "daily_usage_count": row.DailyUsageCount, "last_used_at": row.LastUsedAt, "last_used_at_text": legacyOptionalTimeString(row.LastUsedAt), "status": row.Status, "status_label": cardStatusLabel(row.Status, isCooldown, row.InUse), "status_tone": cardStatusTone(row.Status, isCooldown, row.InUse), "is_cooldown": isCooldown, "in_use": row.InUse, "is_available": cardIsAvailable(row, now), "is_exhausted": cardIsExhausted(row), "cooldown_until": row.CooldownUntil})
 	}
 	stats := cardPoolStats(rows, now)
 	if s.CardPools != nil {
@@ -1360,9 +1360,12 @@ func cardIsAvailable(row models.CardAsset, now time.Time) bool {
 	}
 }
 
-func cardStatusLabel(status string, coolingDown bool) string {
+func cardStatusLabel(status string, coolingDown bool, inUse bool) string {
 	if coolingDown {
 		return "冷却中"
+	}
+	if inUse {
+		return "占用中"
 	}
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "", "active", "available", "ready", "正常":
@@ -1374,8 +1377,8 @@ func cardStatusLabel(status string, coolingDown bool) string {
 	}
 }
 
-func cardStatusTone(status string, coolingDown bool) string {
-	if coolingDown {
+func cardStatusTone(status string, coolingDown bool, inUse bool) string {
+	if coolingDown || inUse {
 		return "warning"
 	}
 	switch strings.ToLower(strings.TrimSpace(status)) {

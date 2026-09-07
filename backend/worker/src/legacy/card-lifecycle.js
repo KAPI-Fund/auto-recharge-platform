@@ -52,12 +52,12 @@ async function settleOneTimeCard(store, card, { failureCode = '', failureMessage
 }
 
 /**
- * Release a reservation when payment was never finally submitted.
+ * Release a reservation when payment was never confirmed.
  *
  * This is deliberately different from settleOneTimeCard: the latter records
  * usage and triggers the provider cancellation path. A missing submit button,
- * pre-submit captcha, or a checkout form that never became usable must not
- * make the card look like a bad card.
+ * captcha overlay after Subscribe, or a checkout form that never became usable
+ * must not leave the card IN_USE or make it look like a bad card.
  */
 async function releaseCardReservation(store, card) {
     const cardId = String(card?.id || '').trim();
