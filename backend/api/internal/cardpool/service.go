@@ -792,7 +792,7 @@ func (s *Service) releaseCardForAllocation(ctx context.Context, internalID, allo
 			}
 			providerReleaseRequired = true
 			releasedAllocationID = allocation.ID
-			providerReleaseAction = firstNonEmpty(allocation.ProviderReleaseAction, releaseActionForProvider(allocation.UsageType, hasAllocationReservation, hasReservation))
+			providerReleaseAction = firstNonEmpty(allocation.ProviderReleaseAction, releaseActionForProvider(allocation.UsageType, allocation.UsageRecordedAt != nil, hasAllocationReservation, hasReservation))
 			if allocation.ProviderReleaseAction == "" && providerReleaseAction != "" {
 				if err := tx.Model(&allocation).Updates(map[string]any{
 					"provider_release_pending": true,
@@ -835,7 +835,7 @@ func (s *Service) releaseCardForAllocation(ctx context.Context, internalID, allo
 		if allocation.UsageRecordedAt != nil && allocation.UsageType == string(UsageOneTime) {
 			status = string(CardUsed)
 		}
-		providerReleaseAction = releaseActionForProvider(allocation.UsageType, hasAllocationReservation, hasReservation)
+		providerReleaseAction = releaseActionForProvider(allocation.UsageType, allocation.UsageRecordedAt != nil, hasAllocationReservation, hasReservation)
 		providerReleaseRequired = providerReleaseAction != ""
 		cardUpdates := map[string]any{"in_use": false, "status": status}
 		if providerReleaseAction == ProviderReleaseActionCancel {
@@ -987,11 +987,12 @@ func (s *Service) persistProviderReleaseResult(ctx context.Context, cardID, allo
 	})
 }
 
-func releaseActionForProvider(usageType string, hasAllocationReservation, hasReservation bool) string {
-	// A recharge card is always single-use. Even a local adapter that also
-	// exposes reservation methods must receive the lifecycle cancellation call
-	// after the attempt; merely unlocking it would allow a second charge.
-	if usageType == string(UsageOneTime) {
+func releaseActionForProvider(usageType string, usageRecorded bool, hasAllocationReservation, hasReservation bool) string {
+	// A one-time card is cancelled only after the payment attempt has been
+	// recorded. If checkout never submitted (missing button, pre-submit
+	// captcha, form not ready), releasing the allocation must not invalidate the
+	// card or call the Provider cancellation API.
+	if usageType == string(UsageOneTime) && usageRecorded {
 		return ProviderReleaseActionCancel
 	}
 	if hasAllocationReservation || hasReservation {

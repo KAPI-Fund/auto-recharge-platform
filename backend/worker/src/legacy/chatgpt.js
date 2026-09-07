@@ -70,7 +70,7 @@ async function createHostedCheckoutLink({ accessToken, planType = 'plus', planNa
 
     const region = String(country || 'PH').toUpperCase();
     const billingCurrency = String(currency || getRegionConfig(region)?.currency || 'PHP').toUpperCase();
-    const planNameResolved = String(store.resolvePlanName(planName || planType)).trim();
+    const planNameResolved = String(planName || store.resolvePlanName(planType)).trim();
     const payload = buildCheckoutPayload(planNameResolved, region, billingCurrency);
 
     const response = await axios.post(
@@ -175,40 +175,52 @@ class ChatGPTService {
      * @returns {Promise<{ sessionId: string|null, checkoutUrl: string|null, error?: string }>}
      */
     async createCheckoutSession(planType, country, currency, planNameOverride) {
-        try {
-            const planName = String(store.resolvePlanName(planNameOverride || planType)).trim();
-            const payload = buildCheckoutPayload(planName, country, currency);
-            console.log(`[ChatGPT] 创建 Checkout Session: plan_name=${planName}, country=${country}, currency=${currency}, checkout_ui_mode=${payload.checkout_ui_mode}`);
+        const planName = String(planNameOverride || store.resolvePlanName(planType)).trim();
+        const payload = buildCheckoutPayload(planName, country, currency);
+        console.log(`[ChatGPT] 创建 Checkout Session: plan_name=${planName}, country=${country}, currency=${currency}, checkout_ui_mode=${payload.checkout_ui_mode}`);
 
-            const response = await this.request.post("https://chatgpt.com/backend-api/payments/checkout", {
-                headers: this.headers,
-                data: payload
-            });
+        const attempts = 3;
+        let lastError = null;
+        for (let attempt = 1; attempt <= attempts; attempt += 1) {
+            try {
+                const response = await this.request.post("https://chatgpt.com/backend-api/payments/checkout", {
+                    headers: this.headers,
+                    data: payload,
+                    timeout: 30000
+                });
 
-            const bodyText = await response.text().catch(() => "");
-            const parsed = parseCheckoutApiResponse(response.status(), bodyText);
+                const bodyText = await response.text().catch(() => "");
+                const parsed = parseCheckoutApiResponse(response.status(), bodyText);
 
-            if (!parsed.ok) {
-                const detail = parsed.error;
-                console.error(`[-] 订单创建失败 (Status: ${parsed.status})`);
-                console.error(`    响应: ${detail}`);
-                if (String(detail).includes('not_eligible') || String(detail).includes('Offer not found')) {
-                    console.error("❌ [提示] 该账号不符合当前套餐/地区订阅条件");
-                } else if (String(detail).includes('permission') || String(detail).includes('already_subscribed')) {
-                    console.error("❌ [提示] 该账号可能已订阅或无权重复开通");
+                if (!parsed.ok) {
+                    const detail = parsed.error;
+                    console.error(`[-] 订单创建失败 (Status: ${parsed.status})`);
+                    console.error(`    响应: ${detail}`);
+                    if (String(detail).includes('not_eligible') || String(detail).includes('Offer not found')) {
+                        console.error("❌ [提示] 该账号不符合当前套餐/地区订阅条件");
+                    } else if (String(detail).includes('permission') || String(detail).includes('already_subscribed')) {
+                        console.error("❌ [提示] 该账号可能已订阅或无权重复开通");
+                    }
+                    return { sessionId: null, checkoutUrl: null, error: detail };
                 }
-                return { sessionId: null, checkoutUrl: null, error: detail };
-            }
 
-            console.log(`✅ 订单创建成功 (session: ${parsed.sessionId ? parsed.sessionId.slice(0, 24) + '...' : 'unknown'})`);
-            if (parsed.checkoutUrl) {
-                console.log(`    支付链接: ${parsed.checkoutUrl.slice(0, 120)}...`);
+                console.log(`✅ 订单创建成功 (session: ${parsed.sessionId ? parsed.sessionId.slice(0, 24) + '...' : 'unknown'})`);
+                if (parsed.checkoutUrl) {
+                    console.log(`    支付链接: ${parsed.checkoutUrl.slice(0, 120)}...`);
+                }
+                return { sessionId: parsed.sessionId, checkoutUrl: parsed.checkoutUrl };
+            } catch (e) {
+                lastError = e;
+                const msg = String(e && e.message || e);
+                const transient = /socket disconnected|TLS|ECONNRESET|ETIMEDOUT|timeout|ERR_CONNECTION|net::ERR/i.test(msg);
+                console.error(`[-] 创建 Checkout Session 异常 (${attempt}/${attempts}): ${msg}`);
+                if (!transient || attempt === attempts) {
+                    return { sessionId: null, checkoutUrl: null, error: msg };
+                }
+                await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
             }
-            return { sessionId: parsed.sessionId, checkoutUrl: parsed.checkoutUrl };
-        } catch (e) {
-            console.error("[-] 创建 Checkout Session 异常:", e.message);
-            return { sessionId: null, checkoutUrl: null, error: e.message };
         }
+        return { sessionId: null, checkoutUrl: null, error: lastError && lastError.message || '创建 Checkout 失败' };
     }
 
     /**
@@ -378,13 +390,13 @@ async function assertCheckoutPageReady(page) {
 }
 
 /**
- * 打开已创建的 Checkout URL，最多重试 openAttempts 次；每次记录 console/网络摘要。
+ * 打开已创建的 Checkout URL，最多重试 openAttempts 次。
  */
 async function openCheckoutUrlWithRetries(page, url, {
     openAttempts = 3,
     sessionId = null
 } = {}) {
-    const { attachPageDebugCapture, dumpPageDebugSnapshot } = require('./page-debug');
+    const { attachPageDebugCapture, dumpPageDebugSnapshot, shouldLogAt, shortUrl } = require('./page-debug');
     const { hasVisibleLoginChrome, isCheckoutLoginGate, buildSessionNotLoggedInError } = require('./auth-page-detect');
     const { clearHumanVerification, buildCaptchaRequiredError, isCheckoutPaymentReady } = require('./human-verification');
     const { assertChatGptLoggedIn } = require('./session-auth');
@@ -392,7 +404,7 @@ async function openCheckoutUrlWithRetries(page, url, {
     const maxAttempts = Math.max(1, Math.min(5, Number(openAttempts) || 3));
     const readyWaitMs = Number(process.env.CHECKOUT_READY_WAIT_MS || 60000);
     const captchaWaitMs = Number(process.env.CAPTCHA_CLEAR_TIMEOUT_MS || 120000);
-    const debug = attachPageDebugCapture(page, { label: 'checkout', force: true });
+    const debug = attachPageDebugCapture(page, { label: 'checkout' });
 
     let lastError = null;
 
@@ -407,7 +419,9 @@ async function openCheckoutUrlWithRetries(page, url, {
                 return null;
             });
             if (gotoResult) {
-                console.log(`[BrowserDebug][nav] attempt=${attempt} status=${gotoResult.status()} url=${String(gotoResult.url() || '').slice(0, 140)}`);
+                if (shouldLogAt('info')) {
+                    console.log(`[BrowserDebug][nav] attempt=${attempt} status=${gotoResult.status()} url=${shortUrl(gotoResult.url())}`);
+                }
             } else {
                 await dumpPageDebugSnapshot(page, `${phase}_goto_failed`);
                 debug.summarize(`${phase}_goto_failed`);
@@ -429,11 +443,9 @@ async function openCheckoutUrlWithRetries(page, url, {
                 console.error(`[Checkout] 第 ${attempt} 次打开后仍为未登录 UI url=${page.url().slice(0, 100)} title=${title}`);
                 await dumpPageDebugSnapshot(page, `${phase}_login_gate`);
                 debug.summarize(`${phase}_login_gate`);
-                // 登录态问题重试意义不大
                 throw new Error(buildSessionNotLoggedInError('Checkout 支付页'));
             }
 
-            // 表单若已就绪，跳过漫长 captcha 等待
             if (await isCheckoutPaymentReady(page)) {
                 const currentUrl = await assertCheckoutPageReady(page);
                 await assertChatGptLoggedIn(page, 'Checkout');
@@ -461,7 +473,6 @@ async function openCheckoutUrlWithRetries(page, url, {
                     throw new Error(captchaResult.message || buildSessionNotLoggedInError('Checkout 支付页'));
                 }
                 if (!captchaResult.checkoutNotReady) {
-                    // 明确 captcha 拦截：重试打开通常无用
                     throw new Error(buildCaptchaRequiredError());
                 }
 

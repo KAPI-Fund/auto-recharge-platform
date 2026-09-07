@@ -51,4 +51,44 @@ async function settleOneTimeCard(store, card, { failureCode = '', failureMessage
     return { ok: errors.length === 0, accepted: true, errors };
 }
 
-module.exports = { settleOneTimeCard };
+/**
+ * Release a reservation when payment was never confirmed.
+ *
+ * This is deliberately different from settleOneTimeCard: the latter records
+ * usage and triggers the provider cancellation path. A missing submit button,
+ * captcha overlay after Subscribe, or a checkout form that never became usable
+ * must not leave the card IN_USE or make it look like a bad card.
+ */
+async function releaseCardReservation(store, card) {
+    const cardId = String(card?.id || '').trim();
+    const allocationId = String(card?.allocationId || card?.allocation_id || '').trim();
+    if (!cardId) {
+        return { ok: true, accepted: true, skipped: true, errors: [] };
+    }
+
+    const release = store?.releaseCardReservation || store?.releaseCard;
+    if (typeof release !== 'function') {
+        return {
+            ok: false,
+            accepted: false,
+            error: new Error('卡片预留释放接口不可用'),
+            errors: [new Error('卡片预留释放接口不可用')],
+        };
+    }
+
+    try {
+        const response = await release.call(store, cardId, allocationId);
+        const ok = response?.ok !== false;
+        return {
+            ok,
+            accepted: true,
+            response,
+            error: ok ? undefined : new Error(String(response?.error || '卡片预留释放失败')),
+            errors: ok ? [] : [new Error(String(response?.error || '卡片预留释放失败'))],
+        };
+    } catch (error) {
+        return { ok: false, accepted: Boolean(error?.status), error, errors: [error] };
+    }
+}
+
+module.exports = { settleOneTimeCard, releaseCardReservation };

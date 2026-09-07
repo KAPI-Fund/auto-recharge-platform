@@ -209,6 +209,7 @@ const executionConfigKeys = [
   "max_concurrent_activations",
   "recharge_queued_timeout_seconds",
   "recharge_task_lease_timeout_seconds",
+  "worker_log_level",
   "maintenance_mode",
   "checkout_mode",
 ] as const;
@@ -2180,6 +2181,21 @@ function ConfigPanel({
             </select>
             <p className="config-description config-field-note">
               影响正式开通与支付链接调试。API 建单快但支付页有时加载失败；定价页 UI 更接近真人升级路径。保存后下一单生效，无需重启。
+            </p>
+          </label>
+          <label className="config-field-spaced config-field-large">
+            Worker 浏览器日志级别
+            <select
+              value={field("worker_log_level", "info")}
+              onChange={(event) => update("worker_log_level", event.target.value)}
+              className="asset-input"
+            >
+              <option value="off">关闭浏览器调试日志</option>
+              <option value="info">INFO：关键导航、错误和失败请求</option>
+              <option value="debug">DEBUG：完整浏览器 console 与网络调试</option>
+            </select>
+            <p className="config-description config-field-note">
+              只影响浏览器调试采集；任务状态、业务步骤和错误日志仍会保留。保存后下一次 Worker 任务生效，无需重启。
             </p>
           </label>
           <div className="config-toggle-block">

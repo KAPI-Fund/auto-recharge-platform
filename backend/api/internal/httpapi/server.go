@@ -703,6 +703,9 @@ func (s *Server) getConfig(c *gin.Context) {
 	if strings.TrimSpace(result["checkout_mode"]) == "" {
 		result["checkout_mode"] = "api"
 	}
+	if strings.TrimSpace(result["worker_log_level"]) == "" {
+		result["worker_log_level"] = "info"
+	}
 	for key, value := range s.emailConfigValues() {
 		result[key] = value
 	}
@@ -788,6 +791,7 @@ func (s *Server) getWorkerConfig(c *gin.Context) {
 	default:
 		checkoutMode = "api"
 	}
+	workerLogLevel := normalizeWorkerLogLevel(s.configValue("worker_log_level", "info"))
 	config := map[string]string{
 		"mode":                           s.configValue("mode", s.Cfg.DefaultRechargeMode),
 		"upstreamBaseURL":                s.configValue("upstreamBaseURL", s.Cfg.UpstreamBaseURL),
@@ -798,6 +802,7 @@ func (s *Server) getWorkerConfig(c *gin.Context) {
 		"runtimeDir":                     s.configValue("runtimeDir", s.Cfg.RuntimeDir),
 		"paymentRegion":                  s.configValue("payment_region", "PH"),
 		"checkoutMode":                   checkoutMode,
+		"workerLogLevel":                 workerLogLevel,
 		"hcaptchaSolverEnabled":          hcaptcha["hcaptcha_solver_enabled"],
 		"hcaptchaVlmApiKey":              hcaptcha["hcaptcha_vlm_api_key"],
 		"hcaptchaVlmBaseUrl":             hcaptcha["hcaptcha_vlm_base_url"],

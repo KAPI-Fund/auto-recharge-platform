@@ -47,7 +47,7 @@ export default async function middleware(request: NextRequest) {
       : pathname === panelPath || pathname.startsWith(`${panelPath}/`)
         ? pathname.replace(panelPath, "/admin") || "/admin"
         : "";
-    if (!destination) return NextResponse.next();
+    if (!destination || destination === pathname) return NextResponse.next();
     return NextResponse.rewrite(new URL(destination, request.url));
   } catch {
     return NextResponse.next();

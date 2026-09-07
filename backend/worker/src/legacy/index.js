@@ -466,20 +466,38 @@ async function run() {
         // --- Phase 0: Proxy Connectivity Check ---
         if (proxyConfig) {
             console.log('正在检查代理连通性...');
-            try {
-                const probeResponse = await context.request.get("http://api.ipify.org/?format=text", {
-                    timeout: 15000
-                });
-                if (probeResponse.ok()) {
-                    const ip = (await probeResponse.text()).trim();
-                    const ipMasked = String(ip).replace(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/, '***.***.$3.$4');
-                    console.log(`✅ [系统] 代理连接成功! 代理公网 IP: ${ipMasked}`);
-                } else {
-                    throw new Error(`代理响应异常: HTTP ${probeResponse.status()}`);
+            const probeUrls = [
+                'https://api.ipify.org/?format=text',
+                'http://api.ipify.org/?format=text',
+                'https://ifconfig.me/ip'
+            ];
+            let probeOk = false;
+            let lastProbeError = null;
+            for (const probeUrl of probeUrls) {
+                try {
+                    const probeResponse = await context.request.get(probeUrl, { timeout: 15000 });
+                    if (probeResponse.ok()) {
+                        const ip = String(await probeResponse.text().catch(() => '')).trim();
+                        const ipMasked = String(ip).replace(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/, '***.***.$3.$4');
+                        console.log(`✅ [系统] 代理连接成功! 代理公网 IP: ${ipMasked || '(truncated)'}`);
+                        probeOk = true;
+                        break;
+                    }
+                    lastProbeError = new Error(`代理响应异常: HTTP ${probeResponse.status()}`);
+                } catch (proxyError) {
+                    lastProbeError = proxyError;
+                    const msg = String(proxyError && proxyError.message || proxyError);
+                    // 本地 SOCKS→HTTP 中继偶发 Connection: close 后多余字节；已看到 200 则视为连通
+                    if (/Parse Error|Data after `Connection: close`/i.test(msg)) {
+                        console.warn('⚠️ [系统] 代理探测 HTTP 解析截断，按连通继续');
+                        probeOk = true;
+                        break;
+                    }
                 }
-            } catch (proxyError) {
+            }
+            if (!probeOk) {
                 console.log("    [!] 请检查 PROXY 配置是否正确，或者账号余额是否充足。");
-                throw proxyError;
+                throw lastProbeError || new Error('代理连通性检查失败');
             }
         }
 

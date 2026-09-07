@@ -120,6 +120,7 @@ func (s *Server) legacySaveConfig(c *gin.Context) {
 		"checkout_mode": true, "browser_pool_enabled": true, "browserCheckoutURL": true, "browserHeadless": true, "runtimeDir": true,
 		"pool_email_imap_host": true, "pool_email_imap_port": true, "pool_email_include_junk": true,
 		"recharge_queued_timeout_seconds": true, "recharge_task_lease_timeout_seconds": true,
+		"worker_log_level": true,
 		"store_debug_mode": true, "stripe_success_url": true, "stripe_cancel_url": true, "public_base_url": true,
 		"email_enabled": true, "email_notify_purchase": true, "email_notify_redeem": true, "email_site_name": true,
 		"email_smtp_host": true, "email_smtp_port": true, "email_smtp_username": true, "email_smtp_from": true,
@@ -170,6 +171,13 @@ func (s *Server) legacySaveConfig(c *gin.Context) {
 				c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "checkout_mode 必须是 api / ui / api_then_ui"})
 				return
 			}
+		case "worker_log_level":
+			level := normalizeWorkerLogLevel(value)
+			if level != strings.ToLower(strings.TrimSpace(value)) {
+				c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "worker_log_level 必须是 off / info / debug"})
+				return
+			}
+			value = level
 		case "maintenance_mode", "maintenance_mode_drain", "browser_pool_enabled",
 			"card_provider_local_text_enabled", "card_provider_airwallex_enabled",
 			"card_provider_stripe_issuing_enabled", "card_provider_photonpay_enabled",
@@ -337,6 +345,7 @@ func normalizeLegacyConfigInput(input map[string]any) map[string]any {
 		"emailSMTPTimeoutSeconds":              "email_smtp_timeout_seconds",
 		"rechargeQueuedTimeoutSeconds":         "recharge_queued_timeout_seconds",
 		"rechargeTaskLeaseTimeoutSeconds":      "recharge_task_lease_timeout_seconds",
+		"workerLogLevel":                       "worker_log_level",
 		"cardPoolDefaultID":                    "card_pool_default_id",
 		"cardPoolRouting":                      "card_pool_routing",
 		"cardPoolDefaultProvider":              "card_pool_default_provider",
@@ -421,6 +430,15 @@ func normalizeLegacyConfigInput(input map[string]any) map[string]any {
 		}
 	}
 	return normalized
+}
+
+func normalizeWorkerLogLevel(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "off", "info", "debug":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return "info"
+	}
 }
 
 func legacyStoreStripeConfig(input map[string]any) map[string]string {
@@ -1110,7 +1128,7 @@ func (s *Server) legacyCards(c *gin.Context) {
 	now := time.Now()
 	for _, row := range rows {
 		isCooldown := cardIsCoolingDown(row, now)
-		items = append(items, gin.H{"id": row.ID, "card_number": maskedCardNumber(row.Last4), "card_expiry": maskedCardExpiry, "card_cvc": maskedCardCVC, "last4": row.Last4, "card_holder": row.Holder, "payment_holder_name": row.PaymentHolderName, "payment_address_line1": row.PaymentAddressLine1, "payment_address_city": row.PaymentAddressCity, "payment_address_state": row.PaymentAddressState, "payment_address_postal": row.PaymentAddressPostal, "payment_address_id": row.PaymentAddressID, "is_active": boolToInt(row.Active), "usage_count": row.UsageCount, "daily_usage_count": row.DailyUsageCount, "last_used_at": row.LastUsedAt, "last_used_at_text": legacyOptionalTimeString(row.LastUsedAt), "status": row.Status, "status_label": cardStatusLabel(row.Status, isCooldown), "status_tone": cardStatusTone(row.Status, isCooldown), "is_cooldown": isCooldown, "is_available": cardIsAvailable(row, now), "is_exhausted": cardIsExhausted(row), "cooldown_until": row.CooldownUntil})
+		items = append(items, gin.H{"id": row.ID, "card_number": maskedCardNumber(row.Last4), "card_expiry": maskedCardExpiry, "card_cvc": maskedCardCVC, "last4": row.Last4, "card_holder": row.Holder, "payment_holder_name": row.PaymentHolderName, "payment_address_line1": row.PaymentAddressLine1, "payment_address_city": row.PaymentAddressCity, "payment_address_state": row.PaymentAddressState, "payment_address_postal": row.PaymentAddressPostal, "payment_address_id": row.PaymentAddressID, "is_active": boolToInt(row.Active), "usage_count": row.UsageCount, "daily_usage_count": row.DailyUsageCount, "last_used_at": row.LastUsedAt, "last_used_at_text": legacyOptionalTimeString(row.LastUsedAt), "status": row.Status, "status_label": cardStatusLabel(row.Status, isCooldown, row.InUse), "status_tone": cardStatusTone(row.Status, isCooldown, row.InUse), "is_cooldown": isCooldown, "in_use": row.InUse, "is_available": cardIsAvailable(row, now), "is_exhausted": cardIsExhausted(row), "cooldown_until": row.CooldownUntil})
 	}
 	stats := cardPoolStats(rows, now)
 	if s.CardPools != nil {
@@ -1342,9 +1360,12 @@ func cardIsAvailable(row models.CardAsset, now time.Time) bool {
 	}
 }
 
-func cardStatusLabel(status string, coolingDown bool) string {
+func cardStatusLabel(status string, coolingDown bool, inUse bool) string {
 	if coolingDown {
 		return "冷却中"
+	}
+	if inUse {
+		return "占用中"
 	}
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "", "active", "available", "ready", "正常":
@@ -1356,8 +1377,8 @@ func cardStatusLabel(status string, coolingDown bool) string {
 	}
 }
 
-func cardStatusTone(status string, coolingDown bool) string {
-	if coolingDown {
+func cardStatusTone(status string, coolingDown bool, inUse bool) string {
+	if coolingDown || inUse {
 		return "warning"
 	}
 	switch strings.ToLower(strings.TrimSpace(status)) {

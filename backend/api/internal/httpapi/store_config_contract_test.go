@@ -68,6 +68,30 @@ func TestNormalizeLegacyConfigInputAcceptsReactFieldNames(t *testing.T) {
 	}
 }
 
+func TestNormalizeLegacyConfigInputAcceptsWorkerLogLevel(t *testing.T) {
+	input := normalizeLegacyConfigInput(map[string]any{"workerLogLevel": "DEBUG"})
+	if input["worker_log_level"] != "DEBUG" {
+		t.Fatalf("worker log level = %#v, want DEBUG", input["worker_log_level"])
+	}
+}
+
+func TestNormalizeWorkerLogLevelDefaultsToInfo(t *testing.T) {
+	for _, testCase := range []struct {
+		input string
+		want  string
+	}{
+		{input: "off", want: "off"},
+		{input: " INFO ", want: "info"},
+		{input: "DEBUG", want: "debug"},
+		{input: "invalid", want: "info"},
+		{input: "", want: "info"},
+	} {
+		if got := normalizeWorkerLogLevel(testCase.input); got != testCase.want {
+			t.Fatalf("normalizeWorkerLogLevel(%q) = %q, want %q", testCase.input, got, testCase.want)
+		}
+	}
+}
+
 func TestNormalizeLegacyConfigInputAcceptsCardProviderFieldNames(t *testing.T) {
 	input := normalizeLegacyConfigInput(map[string]any{
 		"cardPoolDefaultID":                    "pool_airwallex",
