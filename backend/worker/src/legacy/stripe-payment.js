@@ -718,6 +718,7 @@ function buildDeclinedPaymentResult(page, msg, screenshotPath) {
         error: `银行卡被拒绝: ${msg}`,
         screenshot: screenshotPath,
         declined: true,
+        paymentSubmitted: true,
         canRetryCard: true
     };
 }

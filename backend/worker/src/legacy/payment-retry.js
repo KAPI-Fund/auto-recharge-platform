@@ -22,7 +22,7 @@ const MAX_AUTOMATION_ATTEMPTS = MAX_CARD_ATTEMPTS;
 function isPaymentDeclined(errorMsg) {
     if (!errorMsg) return false;
     const declinedKeywords = [
-        'declined', 'card_declined', 'insufficient_funds',
+        'declined', 'card_declined', 'insufficient_funds', 'insufficient funds',
         'expired_card', 'incorrect_cvc', 'processing_error',
         'lost_card', 'stolen_card', 'do_not_honor',
         '拒绝', '被拒', 'your card was declined',
@@ -229,7 +229,8 @@ async function executePaymentWithRetry(page, options) {
                 progress(`FAILURE_SCREENSHOT: ${paymentResult.screenshot}`);
             }
 
-            const declined = paymentSubmitted && (paymentResult.declined || isPaymentDeclined(lastError));
+            // Stripe 拒付（余额不足等）即使没带 paymentSubmitted 也要废弃卡。
+            const declined = paymentResult.declined === true || isPaymentDeclined(lastError);
             const failureCode = declined
                 ? 'card_declined'
                 : paymentResult.captchaRequired
