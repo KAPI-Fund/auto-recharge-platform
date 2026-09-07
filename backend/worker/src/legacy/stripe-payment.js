@@ -194,6 +194,32 @@ async function discoverCardInputs(page, timeout = 45000) {
     return null;
 }
 
+async function selectCheckoutUsageTier(page, planType) {
+    const plan = String(planType || '').toLowerCase();
+    if (plan !== 'pro_5x' && plan !== 'pro_20x') {
+        return false;
+    }
+
+    const want20x = plan === 'pro_20x';
+    const targetPattern = want20x
+        ? /20x more usage than Plus|比 Plus 多\s*20\s*倍/i
+        : /5x more usage than Plus|比 Plus 多\s*5\s*倍/i;
+
+    const target = page.getByText(targetPattern).first();
+    if (!(await target.isVisible({ timeout: 5000 }).catch(() => false))) {
+        console.log('[Stripe] Configure your plan 未出现 5x/20x 选项，跳过档位选择');
+        return false;
+    }
+
+    await target.scrollIntoViewIfNeeded().catch(() => {});
+    await target.click({ timeout: 8000 });
+    console.log(want20x
+        ? '[Stripe] ✅ 已选择 20x more usage than Plus'
+        : '[Stripe] ✅ 已选择 5x more usage than Plus');
+    await page.waitForTimeout(1500);
+    return true;
+}
+
 async function prepareCheckoutCardSection(page) {
     await page.waitForURL(/checkout\/openai_llc|pay\.openai|checkout\.stripe|stripe\.com/i, { timeout: 5000 }).catch(() => {});
     await page.getByText(/Configure your plan|Card number|Pay with/i).first()
@@ -503,6 +529,7 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
                 captchaRequired: true
             };
         }
+        await selectCheckoutUsageTier(page, options.planType);
         await prepareCheckoutCardSection(page);
         await page.waitForTimeout(1000);
 

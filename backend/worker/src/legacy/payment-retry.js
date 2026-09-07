@@ -172,7 +172,8 @@ async function executePaymentWithRetry(page, options) {
         try {
             const paymentResult = await completeStripeCardPayment(page, cardInfo, address, {
                 cardAttempt,
-                holderName: billingHolderName
+                holderName: billingHolderName,
+                planType
             });
 
             if (paymentResult.holderName) {

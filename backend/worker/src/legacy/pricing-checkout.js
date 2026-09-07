@@ -630,6 +630,44 @@ async function selectPricingRegion(page, regionCode) {
 }
 
 /**
+ * Pro 卡 5x / 20x：role=radiogroup aria-label="选择 ChatGPT Pro 套餐"
+ * 里的 role=radio aria-label="5x"|"20x"。必须在 Upgrade to Pro 之前点。
+ */
+async function selectProUsageTierOnPricingPage(page, planType) {
+    const plan = String(planType || '').toLowerCase();
+    if (plan !== 'pro_5x' && plan !== 'pro_20x') {
+        return false;
+    }
+
+    const label = plan === 'pro_20x' ? '20x' : '5x';
+    const group = page.getByRole('radiogroup', { name: /ChatGPT Pro/i }).first();
+    const radio = group.getByRole('radio', { name: new RegExp(`^${label}$`, 'i') }).first();
+    const fallback = page.locator(`[role="radiogroup"][aria-label*="Pro"] button[role="radio"][aria-label="${label}"]`).first();
+
+    let el = radio;
+    if (!(await el.isVisible({ timeout: 2500 }).catch(() => false))) {
+        el = fallback;
+    }
+    if (!(await el.isVisible({ timeout: 1500 }).catch(() => false))) {
+        console.warn(`[Warn] 定价页未找到 Pro ${label} radio，将按当前档位继续升级`);
+        return false;
+    }
+
+    const checked = await el.getAttribute('aria-checked').catch(() => null);
+    const state = await el.getAttribute('data-state').catch(() => null);
+    if (checked === 'true' || state === 'on') {
+        console.log(`✅ [步骤] 定价页 Pro 档位已是 ${label}，无需切换`);
+        return true;
+    }
+
+    await el.scrollIntoViewIfNeeded().catch(() => {});
+    await el.click({ timeout: 5000 });
+    console.log(`✅ [步骤] 定价页已切换 Pro 档位: ${label}`);
+    await page.waitForTimeout(800);
+    return true;
+}
+
+/**
  * 点击对应套餐的升级按钮
  */
 async function clickPlanUpgrade(page, planType) {
@@ -640,6 +678,7 @@ async function clickPlanUpgrade(page, planType) {
     await assertChatGptLoggedIn(page, '升级前');
     await switchToPersonalPlans(page);
     await page.waitForTimeout(1000);
+    await selectProUsageTierOnPricingPage(page, plan);
 
     for (const pattern of patterns) {
         try {
@@ -755,6 +794,7 @@ module.exports = {
     selectPricingRegion,
     switchToPersonalPlans,
     clickPlanUpgrade,
+    selectProUsageTierOnPricingPage,
     waitForCheckoutPage,
     pageShowsTargetRegionPricing
 };
