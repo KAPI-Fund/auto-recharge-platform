@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/cardpool"
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/cardpool/providers/airwallex"
+	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/cardpool/providers/kimoox"
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/config"
 )
 
@@ -120,6 +121,88 @@ func TestCardProviderWebhookRoutePersistsVerifiedEventAndTraceID(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestKimooxWebhookAcknowledgesWithPlainOK(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	database, mock := newAssetRecoveryMock(t)
+	secret := "webhook-secret"
+	registry := cardpool.NewProviderRegistry()
+	registry.Register(kimoox.New(cardWebhookTestConfig{"kimoox_webhook_secret": secret}, nil))
+	router := NewRouter(&Server{
+		DB:        database,
+		Cfg:       config.Config{},
+		CardPools: cardpool.NewService(database, registry, nil),
+	})
+
+	body := []byte(`{"eventId":"wh_test_1","eventType":"WEBHOOK_TEST","eventTime":"2026-09-08 12:00:00","data":{"message":"VCC Webhook 测试推送"}}`)
+	timestamp := fmt.Sprintf("%d", time.Now().UnixMilli())
+	nonce := "nonce-1"
+	bodyHash := sha256.Sum256(body)
+	canonical := strings.Join([]string{"wh_test_1", "WEBHOOK_TEST", timestamp, nonce, hex.EncodeToString(bodyHash[:])}, "\n")
+	digest := hmac.New(sha256.New, []byte(secret))
+	_, _ = digest.Write([]byte(canonical))
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT * FROM "card_provider_events"`)+`.*`+
+		`WHERE provider = \$1 AND provider_event_id = \$2.*`+
+		`LIMIT \$3 FOR UPDATE`).
+		WithArgs("KIMOOX", "wh_test_1", 1).
+		WillReturnRows(sqlmockRowsForNotFound("id"))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO "card_provider_events"`)+`.*`).
+		WithArgs(
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/cards/kimoox", bytes.NewReader(body))
+	request.Header.Set("X-VCC-WEBHOOK-ID", "wh_test_1")
+	request.Header.Set("X-VCC-WEBHOOK-EVENT", "WEBHOOK_TEST")
+	request.Header.Set("X-VCC-WEBHOOK-TIMESTAMP", timestamp)
+	request.Header.Set("X-VCC-WEBHOOK-NONCE", nonce)
+	request.Header.Set("X-VCC-WEBHOOK-SIGNATURE", "v1="+hex.EncodeToString(digest.Sum(nil)))
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if strings.TrimSpace(recorder.Body.String()) != "ok" {
+		t.Fatalf("Kimoox ACK body = %q, want ok", recorder.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestKimooxWebhookRejectsMissingSecret(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	database, _ := newAssetRecoveryMock(t)
+	registry := cardpool.NewProviderRegistry()
+	registry.Register(kimoox.New(cardWebhookTestConfig{}, nil))
+	router := NewRouter(&Server{
+		DB:        database,
+		Cfg:       config.Config{},
+		CardPools: cardpool.NewService(database, registry, nil),
+	})
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/cards/kimoox", bytes.NewReader([]byte(`{"eventId":"wh_test_2","eventType":"WEBHOOK_TEST"}`)))
+	request.Header.Set("X-VCC-WEBHOOK-ID", "wh_test_2")
+	request.Header.Set("X-VCC-WEBHOOK-EVENT", "WEBHOOK_TEST")
+	request.Header.Set("X-VCC-WEBHOOK-TIMESTAMP", fmt.Sprintf("%d", time.Now().UnixMilli()))
+	request.Header.Set("X-VCC-WEBHOOK-NONCE", "nonce-1")
+	request.Header.Set("X-VCC-WEBHOOK-SIGNATURE", "v1=00")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if strings.TrimSpace(recorder.Body.String()) == "ok" {
+		t.Fatal("missing webhook secret must not be acknowledged as ok")
 	}
 }
 

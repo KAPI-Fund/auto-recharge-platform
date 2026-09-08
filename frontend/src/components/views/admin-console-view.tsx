@@ -2099,11 +2099,37 @@ function ConfigPanel({
       .filter(Boolean);
   };
   const loadKimooxBINs = async () => {
+    const typedKey = field("kimoox_api_key").trim();
+    const typedSecret = field("kimoox_api_secret").trim();
+    const savedKey = bool(settings, "kimooxAPIKeySavedValue");
+    const savedSecret = bool(settings, "kimooxAPISecretSavedValue");
+    if ((!typedKey && !savedKey) || (!typedSecret && !savedSecret)) {
+      setError("请先填写 Kimoox API Key 和 API Secret");
+      return;
+    }
     setKimooxBinsBusy(true);
     try {
+      if (typedKey || typedSecret) {
+        const payload: JsonMap = { kimoox_base_url: field("kimoox_base_url", "https://card.kimoox.com") };
+        if (typedKey) payload.kimoox_api_key = typedKey;
+        if (typedSecret) payload.kimoox_api_secret = typedSecret;
+        await saveConfig(payload);
+        await reload();
+      }
       const result = await getKimooxCardBINs();
-      setKimooxBins(rows(result.bins));
-      setNotice(`已读取 ${result.bins.length} 个 Kimoox BIN`);
+      const loaded = rows(result.bins);
+      setKimooxBins(loaded);
+      const remapped = selectedKimooxBINs().map((value) => {
+        const match = loaded.find((bin) => text(bin, "id") === value || text(bin, "bin") === value);
+        return match ? text(match, "bin", text(match, "id")) : value;
+      });
+      const rewritten = remapped.join(",") !== selectedKimooxBINs().join(",");
+      if (rewritten) {
+        updateKimooxBINs(remapped);
+      }
+      setNotice(rewritten
+        ? `已读取 ${result.bins.length} 个 Kimoox BIN，已把内部 ID 换成卡 BIN 号，请保存`
+        : `已读取 ${result.bins.length} 个 Kimoox BIN`);
     } catch (reason) {
       setError(errorMessage(reason));
     } finally {
@@ -2433,7 +2459,7 @@ function ConfigPanel({
           <summary className="config-provider-section-heading config-provider-summary" aria-expanded={openProviderConfig === "KIMOOX"} aria-controls="provider-config-kimoox" onClick={(event) => { event.preventDefault(); toggleProviderConfig("KIMOOX"); }}>
             <div>
               <h3>Kimoox 发卡配置</h3>
-              <p>连接 Kimoox VCC Open API。当前文档公开接口统一使用 HMAC-SHA256 签名，建议先填写测试环境对应的 API 凭据和 Card BIN ID。</p>
+              <p>连接 Kimoox VCC Open API。当前文档公开接口统一使用 HMAC-SHA256 签名，建议先填写测试环境对应的 API 凭据和卡 BIN 号。</p>
             </div>
             <span className="config-provider-code">KIMOOX</span>
             <ChevronDown className="config-provider-chevron" aria-hidden="true" />
@@ -2447,13 +2473,14 @@ function ConfigPanel({
               {kimooxBins.length ? <div className="config-multiselect" data-testid="kimoox-bin-options">
                 {kimooxBins.map((bin) => {
                   const id = text(bin, "id", text(bin, "binId"));
-                  const checked = selectedKimooxBINs().includes(id);
-                  return <label key={id} className="config-multiselect-option"><input type="checkbox" checked={checked} onChange={(event) => updateKimooxBINs(event.target.checked ? [...selectedKimooxBINs(), id] : selectedKimooxBINs().filter((value) => value !== id))} /><span>{id}{text(bin, "name", "") ? ` · ${text(bin, "name")}` : ""}{text(bin, "cardType", "") ? ` · ${text(bin, "cardType")}` : ""}</span></label>;
+                  const binNumber = text(bin, "bin", id);
+                  const checked = selectedKimooxBINs().includes(binNumber) || selectedKimooxBINs().includes(id);
+                  return <label key={id} className="config-multiselect-option"><input type="checkbox" checked={checked} onChange={(event) => updateKimooxBINs(event.target.checked ? [...selectedKimooxBINs().filter((value) => value !== id), binNumber] : selectedKimooxBINs().filter((value) => value !== binNumber && value !== id))} /><span>{binNumber}{text(bin, "cardType", "") ? ` · ${text(bin, "cardType")}` : ""}</span></label>;
                 })}
               </div> : null}
-              <div className="config-actions-row config-actions-row-inline"><Button type="button" variant="outline" onClick={() => void loadKimooxBINs()} disabled={kimooxBinsBusy || !providerIsEnabled(visibleCardProvider)}><RefreshCw className={cn("h-4 w-4", kimooxBinsBusy && "animate-spin")} />{kimooxBinsBusy ? "读取中…" : "读取可用 BIN"}</Button></div>
-              <input value={field("kimoox_card_bin_ids")} onChange={(event) => update("kimoox_card_bin_ids", event.target.value)} className="asset-input" placeholder="例如 1001,1002；也支持换行填写" />
-              <p className="config-help">保存后每次开卡会从已选 BIN 中稳定选择一个；同一幂等任务重试不会随机换 BIN。当前仅支持新的多 BIN 配置字段。</p>
+              <div className="config-actions-row config-actions-row-inline"><Button type="button" variant="outline" onClick={() => void loadKimooxBINs()} disabled={kimooxBinsBusy}><RefreshCw className={cn("h-4 w-4", kimooxBinsBusy && "animate-spin")} />{kimooxBinsBusy ? "读取中…" : "读取可用 BIN"}</Button></div>
+              <input value={field("kimoox_card_bin_ids")} onChange={(event) => update("kimoox_card_bin_ids", event.target.value)} className="asset-input" placeholder="例如 40024200,40041606" />
+              <p className="config-help">填写卡 BIN 号即可，例如 40024200,40041606。开卡时会自动换成 Kimoox 的 BIN ID。也可点读取后勾选。</p>
             </label>
             <label>卡类型<select value={field("kimoox_card_type", "PREPAID")} onChange={(event) => update("kimoox_card_type", event.target.value)} className="asset-input"><option value="PREPAID">PREPAID 储值卡</option><option value="BUDGET">BUDGET 预算卡</option></select><p className="config-help">PREPAID 需要首充金额；BUDGET 需要同时填写 Card Group ID 和 Budget ID。</p></label>
             <label>PREPAID 首充金额<select value={field("kimoox_prepaid_amount_mode", "PLAN_PLUS_5")} onChange={(event) => update("kimoox_prepaid_amount_mode", event.target.value)} className="asset-input"><option value="PLAN_PLUS_5">套餐美元标价 + 5（Plus 25 / Pro 5x 105 / Pro 20x 205）</option><option value="FIXED">固定金额</option></select><p className="config-help">充值任务自动开卡使用此规则，店内 CNY 售价不参与。手动创建虚拟卡必须填写首充金额。</p></label>

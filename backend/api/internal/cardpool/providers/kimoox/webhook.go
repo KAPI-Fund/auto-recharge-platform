@@ -30,7 +30,7 @@ func (p *Provider) ParseWebhook(ctx context.Context, headers http.Header, body [
 	}
 	secret := p.secret("kimoox_webhook_secret", p.value("kimoox_webhook_secret", ""))
 	if secret == "" {
-		return cardpool.InternalEvent{}, cardpool.NewProviderError(providerName, "parse_webhook", cardpool.CategoryInvalidRequest, false, false, errors.New("Kimoox Webhook Secret 未配置"))
+		return cardpool.InternalEvent{}, cardpool.NewProviderError(providerName, "parse_webhook", cardpool.CategoryInvalidRequest, false, false, fmt.Errorf("%w: Kimoox Webhook Secret 未配置", cardpool.ErrInvalidWebhook))
 	}
 	payload, err := decodeKimooxWebhook(body)
 	if err != nil {

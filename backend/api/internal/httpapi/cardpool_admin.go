@@ -65,10 +65,6 @@ func (s *Server) legacyKimooxCardBINs(c *gin.Context) {
 		fail(c, http.StatusServiceUnavailable, "银行卡 Provider 服务不可用")
 		return
 	}
-	if boolConfigValue(s.configValue("card_provider_kimoox_enabled", "0")) != "1" {
-		fail(c, http.StatusBadRequest, "请先启用 KIMOOX Provider")
-		return
-	}
 	provider, err := s.CardPools.Registry.Get("KIMOOX")
 	if err != nil {
 		fail(c, http.StatusBadRequest, "KIMOOX Provider 不可用")

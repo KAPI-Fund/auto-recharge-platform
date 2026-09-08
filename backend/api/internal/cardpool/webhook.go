@@ -23,7 +23,7 @@ const (
 	webhookEventIgnored    = "ignored"
 )
 
-var sensitiveWebhookKey = regexp.MustCompile(`(?i)^(card[_-]?number|account[_-]?number|pan|number|cvc|cvv|security[_-]?code|client[_-]?secret|api[_-]?key|secret|token)$`)
+var sensitiveWebhookKey = regexp.MustCompile(`(?i)^(card[_-]?number|account[_-]?number|pan|number|cvc|cvv|security[_-]?code|client[_-]?secret|api[_-]?key|secret|token|otp|otp[_-]?code|cardnumberciphertext|cvvciphertext|expirydateciphertext)$`)
 
 // ProcessWebhook verifies and applies one provider event. The provider
 // adapter owns signature verification and external payload mapping; this

@@ -197,8 +197,19 @@ func (p *Provider) signRequest(_ context.Context, request *http.Request) error {
 }
 
 func (p *Provider) authenticatedRequest(ctx context.Context, call func(*api.Client) (*http.Response, error)) (*http.Response, error) {
-	if !p.enabled() {
+	return p.doAuthenticatedRequest(ctx, true, call)
+}
+
+func (p *Provider) setupRequest(ctx context.Context, call func(*api.Client) (*http.Response, error)) (*http.Response, error) {
+	return p.doAuthenticatedRequest(ctx, false, call)
+}
+
+func (p *Provider) doAuthenticatedRequest(ctx context.Context, requireEnabled bool, call func(*api.Client) (*http.Response, error)) (*http.Response, error) {
+	if requireEnabled && !p.enabled() {
 		return nil, cardpool.NewProviderError(providerName, "request", cardpool.CategoryProviderUnavailable, false, true, errors.New("Kimoox provider is disabled"))
+	}
+	if strings.TrimSpace(p.secret("kimoox_api_key", p.value("kimoox_api_key", ""))) == "" || strings.TrimSpace(p.secret("kimoox_api_secret", p.value("kimoox_api_secret", ""))) == "" {
+		return nil, cardpool.NewProviderError(providerName, "request", cardpool.CategoryInvalidRequest, false, false, errors.New("请先填写并保存 Kimoox API Key 和 API Secret"))
 	}
 	client, err := p.clientForBase()
 	if err != nil {
@@ -250,7 +261,23 @@ func (p *Provider) CreateCard(ctx context.Context, request cardpool.CreateCardRe
 		return cardpool.PaymentCard{}, cardpool.NewProviderError(providerName, "create_card", cardpool.CategoryProviderUnavailable, false, true, errors.New("Kimoox provider is disabled"))
 	}
 	cardType := strings.ToUpper(p.value("kimoox_card_type", "PREPAID"))
-	binIDs, err := p.binIDs()
+	var rechargeAmount string
+	var cardGroupID, budgetID int64
+	if cardType == "PREPAID" {
+		amount, amountErr := p.prepaidRechargeAmount(request.Amount)
+		if amountErr != nil {
+			return cardpool.PaymentCard{}, cardpool.NewProviderError(providerName, "create_card", cardpool.CategoryInvalidRequest, false, false, amountErr)
+		}
+		rechargeAmount = formatAmount(amount)
+	} else {
+		var groupErr, budgetErr error
+		cardGroupID, groupErr = parseRequiredInt(p.value("kimoox_card_group_id", ""))
+		budgetID, budgetErr = parseRequiredInt(p.value("kimoox_budget_id", ""))
+		if groupErr != nil || budgetErr != nil {
+			return cardpool.PaymentCard{}, cardpool.NewProviderError(providerName, "create_card", cardpool.CategoryInvalidRequest, false, false, errors.New("Kimoox BUDGET 卡需要有效的 Card Group ID 和 Budget ID"))
+		}
+	}
+	binIDs, err := p.resolveCardBINIDs(ctx)
 	if err != nil {
 		return cardpool.PaymentCard{}, cardpool.NewProviderError(providerName, "create_card", cardpool.CategoryInvalidRequest, false, false, err)
 	}
@@ -266,17 +293,8 @@ func (p *Provider) CreateCard(ctx context.Context, request cardpool.CreateCardRe
 		body["holderId"] = *holderID
 	}
 	if cardType == "PREPAID" {
-		amount, amountErr := p.prepaidRechargeAmount(request.Amount)
-		if amountErr != nil {
-			return cardpool.PaymentCard{}, cardpool.NewProviderError(providerName, "create_card", cardpool.CategoryInvalidRequest, false, false, amountErr)
-		}
-		body["rechargeAmount"] = formatAmount(amount)
+		body["rechargeAmount"] = rechargeAmount
 	} else {
-		cardGroupID, groupErr := parseRequiredInt(p.value("kimoox_card_group_id", ""))
-		budgetID, budgetErr := parseRequiredInt(p.value("kimoox_budget_id", ""))
-		if groupErr != nil || budgetErr != nil {
-			return cardpool.PaymentCard{}, cardpool.NewProviderError(providerName, "create_card", cardpool.CategoryInvalidRequest, false, false, errors.New("Kimoox BUDGET 卡需要有效的 Card Group ID 和 Budget ID"))
-		}
 		body["cardGroupId"], body["budgetId"] = cardGroupID, budgetID
 	}
 	if request.Metadata != nil {
@@ -313,7 +331,7 @@ func (p *Provider) CreateCard(ctx context.Context, request cardpool.CreateCardRe
 // ListCardBINs returns the BINs visible to the configured Kimoox account. The
 // response is mapped to provider-neutral metadata for the admin UI.
 func (p *Provider) ListCardBINs(ctx context.Context) ([]cardpool.CardBIN, error) {
-	response, err := p.authenticatedRequest(ctx, func(client *api.Client) (*http.Response, error) {
+	response, err := p.setupRequest(ctx, func(client *api.Client) (*http.Response, error) {
 		return client.KimooxCardBins(ctx, api.KimooxCardBinsJSONRequestBody{})
 	})
 	if err != nil {
@@ -335,7 +353,11 @@ func (p *Provider) ListCardBINs(ctx context.Context) ([]cardpool.CardBIN, error)
 		if !ok {
 			continue
 		}
-		id := shared.StringField(object, "binId", "bin_id", "id", "bin")
+		id := shared.StringField(object, "binId", "bin_id", "id")
+		binNumber := shared.StringField(object, "bin", "cardBin", "card_bin")
+		if id == "" {
+			id = binNumber
+		}
 		if id == "" {
 			continue
 		}
@@ -345,10 +367,11 @@ func (p *Provider) ListCardBINs(ctx context.Context) ([]cardpool.CardBIN, error)
 		seen[id] = struct{}{}
 		result = append(result, cardpool.CardBIN{
 			ID:           id,
-			Name:         shared.StringField(object, "name", "binName", "bin_name"),
+			BIN:          binNumber,
+			Name:         firstNonEmpty(shared.StringField(object, "name", "binName", "bin_name"), binNumber),
 			CardType:     shared.StringField(object, "cardType", "card_type"),
 			Status:       shared.StringField(object, "status", "state"),
-			MaxCardCount: int64(shared.IntField(object, "maxCardCount", "max_card_count")),
+			MaxCardCount: int64(shared.IntField(object, "maxCardCount", "max_card_count", "maxOpenCardCount")),
 			IssuedCount:  int64(shared.IntField(object, "issuedCardCount", "issued_card_count")),
 		})
 	}
@@ -365,20 +388,63 @@ func (p *Provider) binIDs() ([]int64, error) {
 		return nil, err
 	}
 	if len(ids) == 0 {
-		return nil, errors.New("Kimoox Card BIN ID 未配置或无效")
+		return nil, errors.New("Kimoox Card BIN 未配置或无效")
 	}
 	return ids, nil
+}
+
+func (p *Provider) resolveCardBINIDs(ctx context.Context) ([]int64, error) {
+	configured, err := p.binIDs()
+	if err != nil {
+		return nil, err
+	}
+	bins, listErr := p.ListCardBINs(ctx)
+	if listErr != nil {
+		return nil, fmt.Errorf("解析 Kimoox Card BIN 失败: %w", listErr)
+	}
+	byID := make(map[int64]int64, len(bins))
+	byBIN := make(map[int64]int64, len(bins))
+	for _, bin := range bins {
+		id, idErr := strconv.ParseInt(strings.TrimSpace(bin.ID), 10, 64)
+		if idErr != nil || id <= 0 {
+			continue
+		}
+		byID[id] = id
+		if number, numberErr := strconv.ParseInt(strings.TrimSpace(bin.BIN), 10, 64); numberErr == nil && number > 0 {
+			byBIN[number] = id
+		}
+	}
+	resolved := make([]int64, 0, len(configured))
+	seen := make(map[int64]struct{}, len(configured))
+	for _, value := range configured {
+		id, ok := byBIN[value]
+		if !ok {
+			id, ok = byID[value]
+		}
+		if !ok {
+			return nil, fmt.Errorf("Kimoox Card BIN %d 不在可用列表中，请填写卡 BIN 号（例如 40024200）或读取后勾选", value)
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		resolved = append(resolved, id)
+	}
+	if len(resolved) == 0 {
+		return nil, errors.New("Kimoox Card BIN 未配置或无效")
+	}
+	return resolved, nil
 }
 
 func parseKimooxBINIDs(value string) ([]int64, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return nil, errors.New("Kimoox Card BIN ID 未配置或无效")
+		return nil, errors.New("Kimoox Card BIN 未配置或无效")
 	}
 	if strings.HasPrefix(value, "[") {
 		var raw []any
 		if err := json.Unmarshal([]byte(value), &raw); err != nil {
-			return nil, errors.New("Kimoox Card BIN ID 必须是整数列表")
+			return nil, errors.New("Kimoox Card BIN 必须是整数列表")
 		}
 		parts := make([]string, 0, len(raw))
 		for _, item := range raw {
@@ -388,17 +454,17 @@ func parseKimooxBINIDs(value string) ([]int64, error) {
 	}
 	parts := strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == '\n' || r == '\r' || r == ';' || r == ' ' || r == '\t' })
 	if len(parts) == 0 {
-		return nil, errors.New("Kimoox Card BIN ID 未配置或无效")
+		return nil, errors.New("Kimoox Card BIN 未配置或无效")
 	}
 	ids := make([]int64, 0, len(parts))
 	seen := make(map[int64]struct{}, len(parts))
 	for _, part := range parts {
 		id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64)
 		if err != nil || id <= 0 {
-			return nil, errors.New("Kimoox Card BIN ID 必须是大于 0 的整数列表")
+			return nil, errors.New("Kimoox Card BIN 必须是大于 0 的整数列表")
 		}
 		if _, exists := seen[id]; exists {
-			return nil, errors.New("Kimoox Card BIN ID 不能重复")
+			return nil, errors.New("Kimoox Card BIN 不能重复")
 		}
 		seen[id] = struct{}{}
 		ids = append(ids, id)

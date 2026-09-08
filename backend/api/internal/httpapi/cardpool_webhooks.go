@@ -48,6 +48,11 @@ func (s *Server) handleCardProviderWebhook(c *gin.Context, provider string) {
 		return
 	}
 	log.Printf("[card-webhook] trace_id=%s provider=%s event_type=%s duplicate=%t ignored=%t card_updated=%t transaction_saved=%t", traceID, result.Provider, result.EventType, result.Duplicate, result.Ignored, result.CardUpdated, result.TransactionSaved)
+	if provider == "KIMOOX" {
+		// Kimoox only treats 2xx with a trimmed body of "ok" as delivered.
+		c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte("ok"))
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"received": true, "processed": !result.Ignored, "duplicate": result.Duplicate,
 		"ignored": result.Ignored, "provider": result.Provider, "eventType": result.EventType,

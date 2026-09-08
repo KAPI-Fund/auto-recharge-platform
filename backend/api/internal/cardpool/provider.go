@@ -24,6 +24,7 @@ type ConfigValidator interface {
 // It deliberately contains no card number, CVC, or other sensitive data.
 type CardBIN struct {
 	ID           string `json:"id"`
+	BIN          string `json:"bin,omitempty"`
 	Name         string `json:"name,omitempty"`
 	CardType     string `json:"cardType,omitempty"`
 	Status       string `json:"status,omitempty"`

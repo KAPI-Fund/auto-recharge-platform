@@ -9,8 +9,8 @@ import (
 )
 
 func TestSanitizeWebhookPayloadRemovesSensitiveCardFields(t *testing.T) {
-	payload := SanitizeWebhookPayload([]byte(`{"id":"evt-1","data":{"object":{"card_number":"4242424242424242","number":"4242424242424242","cvc":"123","cvv":"456","transaction_id":"txn-1"}}}`))
-	for _, secret := range []string{"4242424242424242", "123", "456"} {
+	payload := SanitizeWebhookPayload([]byte(`{"id":"evt-1","data":{"object":{"card_number":"4242424242424242","number":"4242424242424242","cvc":"123","cvv":"456","otpCode":"387123","transaction_id":"txn-1"}}}`))
+	for _, secret := range []string{"4242424242424242", "123", "456", "387123"} {
 		if strings.Contains(payload, secret) {
 			t.Fatalf("sanitized payload contains sensitive value %q: %s", secret, payload)
 		}

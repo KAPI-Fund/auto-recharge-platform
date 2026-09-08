@@ -599,7 +599,7 @@ export function getConfig() {
 }
 
 export function getKimooxCardBINs() {
-  return legacyRequest<{ success: boolean; provider: string; bins: JsonMap[] }>("/card-providers/kimoox/bins");
+  return legacyRequest<{ success: boolean; provider: string; bins: JsonMap[] }>("/admin/card-providers/kimoox/bins");
 }
 export function saveConfig(body: JsonMap) {
   return legacyRequest<JsonMap>("/admin/config", {
