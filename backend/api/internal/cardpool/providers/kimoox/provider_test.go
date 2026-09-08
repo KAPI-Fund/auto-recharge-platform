@@ -78,8 +78,8 @@ func TestProviderUsesSignedAsyncApplyAndCardLifecycle(t *testing.T) {
 			_, _ = io.WriteString(writer, `{"code":200,"data":{"taskId":901,"batchNo":"BATCH-1","requestNo":"KXREQUEST"}}`)
 		case "/openapi/v1/cards/apply-status/query":
 			call := statusCalls.Add(1)
-			if payload["taskId"] != float64(901) || payload["batchNo"] != "BATCH-1" {
-				t.Fatalf("apply status body = %#v", payload)
+			if payload["taskId"] != float64(901) || payload["batchNo"] != nil || payload["requestNo"] != nil {
+				t.Fatalf("apply status body = %#v, want only taskId", payload)
 			}
 			if call == 1 {
 				_, _ = io.WriteString(writer, `{"code":200,"data":{"taskId":901,"batchNo":"BATCH-1","applyStatus":"PROCESSING","taskStatus":"PENDING"}}`)
@@ -96,6 +96,8 @@ func TestProviderUsesSignedAsyncApplyAndCardLifecycle(t *testing.T) {
 				t.Fatalf("card query body = %#v", payload)
 			}
 			_, _ = io.WriteString(writer, `{"code":200,"data":{"list":[{"cardId":"VC-1","cardNoMask":"486880****1234","cardType":"PREPAID","cardStatus":"ACTIVE","holderName":"Alice Miller","currency":"USD"}]}}`)
+		case "/openapi/v1/cards/balances/query":
+			_, _ = io.WriteString(writer, `{"code":200,"data":{"list":[{"cardId":"VC-1","availableBalance":"0.00","currency":"USD"}]}}`)
 		case "/openapi/v1/cards/status/operate":
 			if payload["cardId"] != "VC-1" || payload["operationType"] == "" || payload["requestNo"] == "" {
 				t.Fatalf("status body = %#v", payload)
@@ -150,6 +152,85 @@ func TestProviderUsesSignedAsyncApplyAndCardLifecycle(t *testing.T) {
 	health, err := provider.HealthCheck(context.Background())
 	if err != nil || !health.Available || health.Status != "healthy" {
 		t.Fatalf("HealthCheck() = %#v, err = %v", health, err)
+	}
+}
+
+func TestCancelCardWithdrawsRemainingBalanceBeforeCancel(t *testing.T) {
+	const apiSecret = "api-secret"
+	config := testConfig{
+		"card_provider_kimoox_enabled":       "1",
+		"kimoox_api_key":                     "api-key",
+		"kimoox_api_secret":                  apiSecret,
+		"kimoox_apply_poll_attempts":         "3",
+		"kimoox_apply_poll_interval_seconds": "0",
+	}
+	var balanceCalls atomic.Int32
+	var withdrew, cancelled bool
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		assertKimooxSignature(t, request, body, apiSecret)
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		switch request.URL.Path {
+		case "/openapi/v1/cards/balances/query":
+			call := balanceCalls.Add(1)
+			if call == 1 {
+				_, _ = io.WriteString(writer, `{"code":200,"data":{"list":[{"cardId":"VC-1","availableBalance":"25.00","currency":"USD"}]}}`)
+				return
+			}
+			_, _ = io.WriteString(writer, `{"code":200,"data":{"list":[{"cardId":"VC-1","availableBalance":"0.01","currency":"USD"}]}}`)
+		case "/openapi/v1/cards/funds/operate":
+			if payload["cardId"] != "VC-1" || payload["operationType"] != "WITHDRAW" || payload["amount"] != "24.99" || payload["currency"] != "USD" {
+				t.Fatalf("withdraw body = %#v, want 24.99 leaving 0.01", payload)
+			}
+			if cancelled {
+				t.Fatal("WITHDRAW after CANCEL")
+			}
+			withdrew = true
+			_, _ = io.WriteString(writer, `{"code":200,"data":{"status":"SUBMITTED"}}`)
+		case "/openapi/v1/cards/status/operate":
+			if payload["cardId"] != "VC-1" || payload["operationType"] != "CANCEL" {
+				t.Fatalf("cancel body = %#v", payload)
+			}
+			if !withdrew {
+				t.Fatal("CANCEL before WITHDRAW")
+			}
+			cancelled = true
+			_, _ = io.WriteString(writer, `{"code":200,"data":{"status":"SUBMITTED"}}`)
+		default:
+			t.Fatalf("unexpected path %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	config["kimoox_base_url"] = server.URL
+
+	provider := New(config, server.Client())
+	if err := provider.CancelCard(context.Background(), "VC-1"); err != nil {
+		t.Fatalf("CancelCard() error = %v", err)
+	}
+	if !withdrew || !cancelled {
+		t.Fatalf("withdrew=%t cancelled=%t", withdrew, cancelled)
+	}
+}
+
+func TestKimooxWithdrawableAmountLeavesOneCent(t *testing.T) {
+	if got := kimooxWithdrawableAmount(25); got != 24.99 {
+		t.Fatalf("kimooxWithdrawableAmount(25) = %v, want 24.99", got)
+	}
+	if got := kimooxWithdrawableAmount(0.01); got != 0 {
+		t.Fatalf("kimooxWithdrawableAmount(0.01) = %v, want 0", got)
+	}
+	if got := kimooxWithdrawableAmount(0); got != 0 {
+		t.Fatalf("kimooxWithdrawableAmount(0) = %v, want 0", got)
+	}
+	if !kimooxBalanceRetainSatisfied(0.01) || kimooxBalanceRetainSatisfied(0.02) {
+		t.Fatal("retain check should pass at 0.01 and fail at 0.02")
 	}
 }
 
@@ -327,6 +408,33 @@ func TestParseKimooxBINIDsRejectsInvalidAndDuplicateValues(t *testing.T) {
 				t.Fatalf("parseKimooxBINIDs(%q) unexpectedly succeeded", value)
 			}
 		})
+	}
+}
+
+func TestKimooxApplyStatusBodyUsesExactlyOneQueryKey(t *testing.T) {
+	body, err := kimooxApplyStatusBody("901", "BATCH-1", "KXREQUEST")
+	if err != nil {
+		t.Fatalf("kimooxApplyStatusBody() error = %v", err)
+	}
+	if body["taskId"] != int64(901) || body["batchNo"] != nil || body["requestNo"] != nil {
+		t.Fatalf("body = %#v, want only taskId", body)
+	}
+	body, err = kimooxApplyStatusBody("", "BATCH-1", "KXREQUEST")
+	if err != nil {
+		t.Fatalf("kimooxApplyStatusBody() error = %v", err)
+	}
+	if body["batchNo"] != "BATCH-1" || body["taskId"] != nil || body["requestNo"] != nil {
+		t.Fatalf("body = %#v, want only batchNo", body)
+	}
+	body, err = kimooxApplyStatusBody("", "", "KXREQUEST")
+	if err != nil {
+		t.Fatalf("kimooxApplyStatusBody() error = %v", err)
+	}
+	if body["requestNo"] != "KXREQUEST" || body["taskId"] != nil || body["batchNo"] != nil {
+		t.Fatalf("body = %#v, want only requestNo", body)
+	}
+	if _, err := kimooxApplyStatusBody("", "", ""); err == nil {
+		t.Fatal("empty apply-status query unexpectedly succeeded")
 	}
 }
 
@@ -579,6 +687,20 @@ func TestKimooxBusinessErrorsDoNotAllowFailoverForFundsOrDeclines(t *testing.T) 
 				t.Fatal("business error must not be failover eligible")
 			}
 		})
+	}
+}
+
+func TestKimooxBusinessErrorKeepsUnusedCardCancelMessage(t *testing.T) {
+	err := kimooxBusinessError(map[string]any{"code": "500", "msg": "销卡失败：该卡暂无有效消费交易，暂不支持销卡"}, "status_operate")
+	if err == nil || !strings.Contains(err.Error(), "该卡暂无有效消费交易，暂不支持销卡") {
+		t.Fatalf("error = %v", err)
+	}
+	if cardpool.IsFailoverEligible(err) {
+		t.Fatal("unused-card cancel restriction must not failover")
+	}
+	wrapped := kimooxUnusedCardCancelError(fmt.Errorf(`KIMOOX status_operate: HTTP 500: {"msg":"销卡失败：该卡暂无有效消费交易，暂不支持销卡"}`))
+	if wrapped == nil || !strings.Contains(wrapped.Error(), "该卡暂无有效消费交易，暂不支持销卡") {
+		t.Fatalf("wrapped = %v", wrapped)
 	}
 }
 

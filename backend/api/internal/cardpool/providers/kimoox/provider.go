@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -28,6 +29,10 @@ import (
 )
 
 const providerName = "KIMOOX"
+
+// Kimoox rejects a full-balance WITHDRAW. The card must keep 0.01 USD, so the
+// largest allowed transfer is availableBalance - 0.01.
+const kimooxCancelRetainUSD = 0.01
 
 var requestNoUnsafeCharacters = regexp.MustCompile(`[^A-Za-z0-9_-]+`)
 
@@ -322,8 +327,15 @@ func (p *Provider) CreateCard(ctx context.Context, request cardpool.CreateCardRe
 	if taskID == "" && batchNo == "" {
 		return cardpool.PaymentCard{}, cardpool.NewProviderError(providerName, "create_card", cardpool.CategoryTechnicalFailure, true, true, errors.New("Kimoox create response has no task identity"))
 	}
-	if err := p.waitForApply(ctx, taskID, batchNo, requestNo); err != nil {
+	resolvedBatch, err := p.waitForApply(ctx, taskID, batchNo, requestNo)
+	if err != nil {
 		return cardpool.PaymentCard{}, err
+	}
+	if strings.TrimSpace(resolvedBatch) != "" {
+		batchNo = resolvedBatch
+	}
+	if strings.TrimSpace(batchNo) == "" {
+		return cardpool.PaymentCard{}, cardpool.NewProviderError(providerName, "create_card", cardpool.CategoryTechnicalFailure, true, true, errors.New("Kimoox 开卡成功但未返回 batchNo"))
 	}
 	return p.findAppliedCard(ctx, batchNo, request)
 }
@@ -484,7 +496,7 @@ func selectBINID(ids []int64, stableKey string) int64 {
 	return ids[value%uint64(len(ids))]
 }
 
-func (p *Provider) waitForApply(ctx context.Context, taskID, batchNo, requestNo string) error {
+func (p *Provider) waitForApply(ctx context.Context, taskID, batchNo, requestNo string) (string, error) {
 	attempts, _ := p.pollAttempts()
 	interval, _ := p.pollInterval()
 	for attempt := 0; attempt < attempts; attempt++ {
@@ -493,52 +505,64 @@ func (p *Provider) waitForApply(ctx context.Context, taskID, batchNo, requestNo 
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				return ctx.Err()
+				return "", ctx.Err()
 			case <-timer.C:
 			}
 		}
-		body := api.KimooxCardsApplyStatusJSONRequestBody{}
-		if value := strings.TrimSpace(taskID); value != "" {
-			if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
-				body["taskId"] = parsed
-			}
-		}
-		if strings.TrimSpace(batchNo) != "" {
-			body["batchNo"] = batchNo
-		}
-		if strings.TrimSpace(requestNo) != "" {
-			body["requestNo"] = requestNo
+		body, queryErr := kimooxApplyStatusBody(taskID, batchNo, requestNo)
+		if queryErr != nil {
+			return "", cardpool.NewProviderError(providerName, "apply_status", cardpool.CategoryInvalidRequest, false, false, queryErr)
 		}
 		response, err := p.authenticatedRequest(ctx, func(client *api.Client) (*http.Response, error) {
 			return client.KimooxCardsApplyStatus(ctx, body)
 		})
 		if err != nil {
-			return err
+			return "", err
 		}
 		payload, err := shared.DecodeJSONObjectResponse(providerName, "apply_status", response)
 		if err != nil {
-			return err
+			return "", err
 		}
 		if err := kimooxBusinessError(payload, "apply_status"); err != nil {
-			return err
+			return "", err
 		}
 		data := objectData(payload)
 		applyStatus := strings.ToUpper(firstNonEmpty(shared.StringField(data, "applyStatus", "apply_status"), shared.StringField(data, "taskStatus", "task_status")))
 		taskStatus := strings.ToUpper(shared.StringField(data, "taskStatus", "task_status"))
-		if applyStatus == "SUCCESS" || taskStatus == "SUCCESS" {
-			return nil
-		}
-		if isKimooxFailureStatus(applyStatus) || isKimooxFailureStatus(taskStatus) {
-			return cardpool.NewProviderError(providerName, "apply_status", cardpool.CategoryBusinessDecline, false, false, errors.New("Kimoox 开卡失败"))
-		}
 		if latest := firstNonEmpty(shared.StringField(data, "batchNo", "batch_no"), batchNo); latest != "" {
 			batchNo = latest
 		}
 		if latest := firstNonEmpty(shared.StringField(data, "taskId", "task_id"), taskID); latest != "" {
 			taskID = latest
 		}
+		if isKimooxApplySuccess(applyStatus) || isKimooxApplySuccess(taskStatus) {
+			return batchNo, nil
+		}
+		if isKimooxFailureStatus(applyStatus) || isKimooxFailureStatus(taskStatus) {
+			return "", cardpool.NewProviderError(providerName, "apply_status", cardpool.CategoryBusinessDecline, false, false, errors.New("Kimoox 开卡失败"))
+		}
 	}
-	return cardpool.NewProviderError(providerName, "apply_status", cardpool.CategoryProviderUnavailable, true, true, errors.New("Kimoox 开卡状态轮询超时"))
+	return "", cardpool.NewProviderError(providerName, "apply_status", cardpool.CategoryProviderUnavailable, true, true, errors.New("Kimoox 开卡状态轮询超时"))
+}
+
+func kimooxApplyStatusBody(taskID, batchNo, requestNo string) (api.KimooxCardsApplyStatusJSONRequestBody, error) {
+	body := api.KimooxCardsApplyStatusJSONRequestBody{}
+	if value := strings.TrimSpace(taskID); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err == nil && parsed > 0 {
+			body["taskId"] = parsed
+			return body, nil
+		}
+	}
+	if value := strings.TrimSpace(batchNo); value != "" {
+		body["batchNo"] = value
+		return body, nil
+	}
+	if value := strings.TrimSpace(requestNo); value != "" {
+		body["requestNo"] = value
+		return body, nil
+	}
+	return nil, errors.New("Kimoox 开卡状态查询需要 taskId、batchNo 或 requestNo 其中之一")
 }
 
 func (p *Provider) findAppliedCard(ctx context.Context, batchNo string, request cardpool.CreateCardRequest) (cardpool.PaymentCard, error) {
@@ -666,7 +690,126 @@ func (p *Provider) UnfreezeCard(ctx context.Context, providerCardID string) erro
 }
 
 func (p *Provider) CancelCard(ctx context.Context, providerCardID string) error {
+	providerCardID = strings.TrimSpace(providerCardID)
+	if providerCardID == "" {
+		return cardpool.ErrCardNotFound
+	}
+	if err := p.withdrawCardBalance(ctx, providerCardID); err != nil {
+		return err
+	}
 	return p.operateStatus(ctx, providerCardID, "CANCEL")
+}
+
+func (p *Provider) withdrawCardBalance(ctx context.Context, providerCardID string) error {
+	balance, err := p.cardAvailableBalance(ctx, providerCardID)
+	if err != nil {
+		return err
+	}
+	amount := kimooxWithdrawableAmount(balance)
+	if amount <= 0 {
+		return nil
+	}
+	body := api.KimooxCardsFundsOperateJSONRequestBody{
+		"requestNo":     kimooxRequestNo(uuid.NewString()),
+		"cardId":        providerCardID,
+		"operationType": "WITHDRAW",
+		"amount":        formatAmount(amount),
+		"currency":      "USD",
+	}
+	response, err := p.authenticatedRequest(ctx, func(client *api.Client) (*http.Response, error) {
+		return client.KimooxCardsFundsOperate(ctx, body)
+	})
+	if err != nil {
+		return err
+	}
+	payload, err := shared.DecodeJSONObjectResponse(providerName, "withdraw_card", response)
+	if err != nil {
+		return err
+	}
+	if err := kimooxBusinessError(payload, "withdraw_card"); err != nil {
+		return err
+	}
+	return p.waitForCardBalanceCleared(ctx, providerCardID)
+}
+
+func (p *Provider) waitForCardBalanceCleared(ctx context.Context, providerCardID string) error {
+	attempts, _ := p.pollAttempts()
+	if attempts < 1 {
+		attempts = 1
+	}
+	interval, _ := p.pollInterval()
+	for attempt := 0; attempt < attempts; attempt++ {
+		if attempt > 0 && interval > 0 {
+			timer := time.NewTimer(interval)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+		}
+		balance, err := p.cardAvailableBalance(ctx, providerCardID)
+		if err != nil {
+			return err
+		}
+		if kimooxBalanceRetainSatisfied(balance) {
+			return nil
+		}
+	}
+	return cardpool.NewProviderError(providerName, "withdraw_card", cardpool.CategoryProviderUnavailable, true, true, errors.New("Kimoox 卡余额转出未完成，暂不能销卡"))
+}
+
+func kimooxWithdrawableAmount(balance float64) float64 {
+	cents := int64(math.Round(balance * 100))
+	retain := int64(math.Round(kimooxCancelRetainUSD * 100))
+	if cents <= retain {
+		return 0
+	}
+	return float64(cents-retain) / 100
+}
+
+func kimooxBalanceRetainSatisfied(balance float64) bool {
+	cents := int64(math.Round(balance * 100))
+	retain := int64(math.Round(kimooxCancelRetainUSD * 100))
+	return cents <= retain
+}
+
+func (p *Provider) cardAvailableBalance(ctx context.Context, providerCardID string) (float64, error) {
+	body := api.KimooxCardBalancesQueryJSONRequestBody{"cardIds": []string{providerCardID}}
+	response, err := p.authenticatedRequest(ctx, func(client *api.Client) (*http.Response, error) {
+		return client.KimooxCardBalancesQuery(ctx, body)
+	})
+	if err != nil {
+		return 0, err
+	}
+	payload, err := shared.DecodeJSONObjectResponse(providerName, "card_balance", response)
+	if err != nil {
+		return 0, err
+	}
+	if err := kimooxBusinessError(payload, "card_balance"); err != nil {
+		return 0, err
+	}
+	data := objectData(payload)
+	items := shared.ArrayField(data, "list", "balances", "items", "records")
+	if len(items) == 0 {
+		id := shared.StringField(data, "cardId", "card_id")
+		if id == "" || strings.EqualFold(id, providerCardID) {
+			return shared.FloatField(data, "availableBalance", "available_balance", "balance", "availableAmount", "available_amount"), nil
+		}
+		return 0, nil
+	}
+	for _, item := range items {
+		object, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		id := shared.StringField(object, "cardId", "card_id", "id")
+		if id != "" && !strings.EqualFold(id, providerCardID) {
+			continue
+		}
+		return shared.FloatField(object, "availableBalance", "available_balance", "balance", "availableAmount", "available_amount"), nil
+	}
+	return 0, nil
 }
 
 func (p *Provider) operateStatus(ctx context.Context, providerCardID, operation string) error {
@@ -687,9 +830,12 @@ func (p *Provider) operateStatus(ctx context.Context, providerCardID, operation 
 	}
 	payload, err := shared.DecodeJSONObjectResponse(providerName, "status_operate", response)
 	if err != nil {
-		return err
+		return kimooxUnusedCardCancelError(err)
 	}
-	return kimooxBusinessError(payload, "status_operate")
+	if err := kimooxBusinessError(payload, "status_operate"); err != nil {
+		return kimooxUnusedCardCancelError(err)
+	}
+	return nil
 }
 
 func (p *Provider) UpdateLimits(ctx context.Context, providerCardID string, limits cardpool.CardLimits) error {
@@ -834,9 +980,14 @@ func kimooxBusinessError(payload map[string]any, operation string) error {
 	if code == "" || code == "0" || code == "200" || strings.EqualFold(code, "success") || strings.EqualFold(code, "ok") {
 		return nil
 	}
+	if strings.TrimSpace(message) == "" {
+		message = "Kimoox 返回业务错误"
+	}
 	lower := strings.ToLower(message + " " + code)
 	category, retryable, failover := cardpool.CategoryInvalidRequest, false, false
 	switch {
+	case strings.Contains(message, "暂无有效消费") || strings.Contains(message, "暂不支持销卡"):
+		category = cardpool.CategoryBusinessDecline
 	case strings.Contains(lower, "rate"), strings.Contains(lower, "too many"), code == "429":
 		category, retryable = cardpool.CategoryRateLimit, true
 	case strings.Contains(lower, "timeout"), strings.Contains(lower, "temporar"), strings.Contains(lower, "unavailable"), strings.Contains(lower, "busy"), code == "500", code == "502", code == "503", code == "504":
@@ -850,7 +1001,18 @@ func kimooxBusinessError(payload map[string]any, operation string) error {
 	case code == "401" || code == "403":
 		category = cardpool.CategoryInvalidRequest
 	}
-	return cardpool.NewProviderError(providerName, operation, category, retryable, failover, errors.New("Kimoox provider returned an application error"))
+	return cardpool.NewProviderError(providerName, operation, category, retryable, failover, errors.New(message))
+}
+
+func kimooxUnusedCardCancelError(err error) error {
+	if err == nil {
+		return nil
+	}
+	text := err.Error()
+	if !strings.Contains(text, "暂无有效消费") && !strings.Contains(text, "暂不支持销卡") {
+		return err
+	}
+	return cardpool.NewProviderError(providerName, "status_operate", cardpool.CategoryBusinessDecline, false, false, errors.New("该卡暂无有效消费交易，暂不支持销卡"))
 }
 
 func objectData(payload map[string]any) map[string]any {
@@ -1058,6 +1220,15 @@ func decodeBase64URL(value string) ([]byte, error) {
 		}
 	}
 	return nil, errors.New("invalid base64")
+}
+
+func isKimooxApplySuccess(value string) bool {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "SUCCESS", "PARTIAL_SUCCESS":
+		return true
+	default:
+		return false
+	}
 }
 
 func isKimooxFailureStatus(value string) bool {
