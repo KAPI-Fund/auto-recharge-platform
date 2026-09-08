@@ -121,7 +121,7 @@ func (s *Server) legacySaveConfig(c *gin.Context) {
 		"pool_email_imap_host": true, "pool_email_imap_port": true, "pool_email_include_junk": true,
 		"recharge_queued_timeout_seconds": true, "recharge_task_lease_timeout_seconds": true,
 		"worker_log_level":              true,
-		"proxy_refresh_timeout_seconds": true, "proxy_refresh_wait_ms": true, "proxy_refresh_allow_private": true,
+		"proxy_refresh_timeout_seconds": true, "proxy_refresh_wait_ms": true, "proxy_refresh_allow_private": true, "proxy_max_concurrent": true, "proxy_refresh_min_interval_seconds": true,
 		"store_debug_mode": true, "stripe_success_url": true, "stripe_cancel_url": true, "public_base_url": true,
 		"email_enabled": true, "email_notify_purchase": true, "email_notify_redeem": true, "email_site_name": true,
 		"email_smtp_host": true, "email_smtp_port": true, "email_smtp_username": true, "email_smtp_from": true,
@@ -299,6 +299,10 @@ func (s *Server) legacySaveConfig(c *gin.Context) {
 				return
 			}
 			value = strconv.Itoa(parsed)
+		case "proxy_max_concurrent":
+			value = strconv.Itoa(proxyMaxConcurrentValue(value))
+		case "proxy_refresh_min_interval_seconds":
+			value = strconv.Itoa(int(proxyRefreshMinIntervalValue(value) / time.Second))
 		case "proxy_refresh_allow_private":
 			switch strings.ToLower(strings.TrimSpace(value)) {
 			case "1", "true", "yes", "on":
@@ -375,6 +379,8 @@ func normalizeLegacyConfigInput(input map[string]any) map[string]any {
 		"proxyRefreshTimeoutSeconds":           "proxy_refresh_timeout_seconds",
 		"proxyRefreshWaitMs":                   "proxy_refresh_wait_ms",
 		"proxyRefreshAllowPrivate":             "proxy_refresh_allow_private",
+		"proxyMaxConcurrent":                   "proxy_max_concurrent",
+		"proxyRefreshMinIntervalSeconds":       "proxy_refresh_min_interval_seconds",
 		"emailEnabled":                         "email_enabled",
 		"emailNotifyPurchase":                  "email_notify_purchase",
 		"emailNotifyRedeem":                    "email_notify_redeem",

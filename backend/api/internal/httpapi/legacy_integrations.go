@@ -39,7 +39,7 @@ func (s *Server) legacyListProxies(c *gin.Context) {
 		items = append(items, proxyResponse(row))
 	}
 	_, _, timeoutSec, waitMs := s.proxyRefreshSettings()
-	c.JSON(http.StatusOK, gin.H{"success": true, "proxies": items, "summary": proxyListSummary(rows, timeoutSec, waitMs)})
+	c.JSON(http.StatusOK, gin.H{"success": true, "proxies": items, "summary": proxyListSummary(rows, timeoutSec, waitMs, s.proxyMaxConcurrent(), int(s.proxyRefreshMinInterval()/time.Second))})
 }
 
 func proxyResponse(row models.ProxyAsset) gin.H {

@@ -501,19 +501,19 @@ export class RechargeWorker {
             if (proxyId) {
               await this.api.store("releaseProxy", { id: proxyId }).catch(() => this.api.store("releaseProxy", { id: proxyId }).catch(() => undefined));
               proxyId = "";
+              const message = "没有可用代理";
+              combinedOutput += `${combinedOutput ? "\n\n" : ""}===== ATTEMPT ${attempt} =====\n${message}`;
+              finalResult = {
+                status: "failed",
+                message,
+                output: combinedOutput,
+                analysis: { status: "retry", shouldRetry: true, errorCode: "proxy_unavailable", message },
+                attempt,
+              };
+              if (attempt >= maxAttempts) break;
+              await updateOwnedTask({ status: "running", progress: Math.min(90, 20 + attempt * 8), message, attempt, rawOutput: combinedOutput });
+              continue;
             }
-            const message = "没有可用代理";
-            combinedOutput += `${combinedOutput ? "\n\n" : ""}===== ATTEMPT ${attempt} =====\n${message}`;
-            finalResult = {
-              status: "failed",
-              message,
-              output: combinedOutput,
-              analysis: { status: "retry", shouldRetry: true, errorCode: "proxy_unavailable", message },
-              attempt,
-            };
-            if (attempt >= maxAttempts) break;
-            await updateOwnedTask({ status: "running", progress: Math.min(90, 20 + attempt * 8), message, attempt, rawOutput: combinedOutput });
-            continue;
           }
           if (proxyId && !usedProxyIds.includes(proxyId)) {
             usedProxyIds.push(proxyId);

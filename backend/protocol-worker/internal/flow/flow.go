@@ -73,9 +73,6 @@ func Run(opts Options) Result {
 	if proxy == "" {
 		proxy = strings.TrimSpace(opts.Config.Proxy)
 	}
-	if proxy == "" {
-		return Result{Status: "retry", Message: "没有可用代理", ErrorCode: "proxy_unavailable"}
-	}
 
 	result.log(opts, 6, fmt.Sprintf("正在启动 Chrome 打开 chatgpt.com（代理 %s）。SOCKS 会先转本地中继，超时通常是代理或 DNS，不是页面卡住。", httpx.MaskProxy(proxy)))
 	browser, err := chromeapi.Open(proxy, regionCfg.Locale, regionCfg.Timezone)

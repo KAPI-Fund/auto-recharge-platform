@@ -843,7 +843,7 @@ async function runFullProtocolFlow(email) {
             }
         }
 
-        proxyOk = Boolean(proxyValue) && (await checkProxyAvailability(proxyValue));
+        proxyOk = !proxyValue || (await checkProxyAvailability(proxyValue));
         if (proxyOk) {
             break;
         }

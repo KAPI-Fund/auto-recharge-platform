@@ -130,15 +130,9 @@ func process(ctx context.Context, cfg config.Config, api *store.Client, message 
 		}
 		proxyURL := strings.TrimSpace(store.Str(proxy, "proxy"))
 		proxyID := strings.TrimSpace(firstNonEmpty(store.Str(proxy, "id"), store.Str(proxy, "proxyId")))
-		if proxyURL == "" {
-			if proxyID != "" {
-				_, _ = api.Action("releaseProxy", map[string]any{"id": proxyID})
-			}
-			result = flow.Result{Status: "retry", Message: "没有可用代理", ErrorCode: "proxy_unavailable"}
-			if attempt == cfg.MaxAttempts {
-				break
-			}
-			continue
+		if proxyURL == "" && proxyID != "" {
+			_, _ = api.Action("releaseProxy", map[string]any{"id": proxyID})
+			proxyID = ""
 		}
 		secret["proxy"] = proxyURL
 		if store.Str(secret, "region") == "" {

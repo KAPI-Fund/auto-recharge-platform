@@ -2670,12 +2670,18 @@ function ProxyPanel({
   const [refreshURL, setRefreshURL] = useState("");
   const [timeoutSec, setTimeoutSec] = useState("15");
   const [waitMs, setWaitMs] = useState("0");
+  const [maxConcurrent, setMaxConcurrent] = useState("2");
+  const [minIntervalSec, setMinIntervalSec] = useState("120");
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     const nextTimeout = text(proxyMeta, "refresh_timeout_seconds");
     const nextWait = text(proxyMeta, "refresh_wait_ms");
+    const nextMax = text(proxyMeta, "max_concurrent");
+    const nextInterval = text(proxyMeta, "refresh_min_interval_seconds");
     if (nextTimeout) setTimeoutSec(nextTimeout);
     if (nextWait || nextWait === "0") setWaitMs(nextWait || "0");
+    if (nextMax) setMaxConcurrent(nextMax);
+    if (nextInterval || nextInterval === "0") setMinIntervalSec(nextInterval || "0");
   }, [proxyMeta]);
   const refresh = async () => {
     try {
@@ -2685,6 +2691,8 @@ function ProxyPanel({
       setProxyMeta(summary);
       setTimeoutSec(text(summary, "refresh_timeout_seconds", "15"));
       setWaitMs(text(summary, "refresh_wait_ms", "0"));
+      setMaxConcurrent(text(summary, "max_concurrent", "2"));
+      setMinIntervalSec(text(summary, "refresh_min_interval_seconds", "120"));
     } catch (reason) {
       setError(errorMessage(reason));
     }
@@ -2708,6 +2716,8 @@ function ProxyPanel({
       await saveConfig({
         proxy_refresh_timeout_seconds: timeoutSec,
         proxy_refresh_wait_ms: waitMs,
+        proxy_max_concurrent: maxConcurrent,
+        proxy_refresh_min_interval_seconds: minIntervalSec,
       });
       setNotice("代理刷新配置已保存");
       await refresh();
@@ -2811,7 +2821,7 @@ function ProxyPanel({
           />
         </label>
         <p className="config-help" data-testid="proxy-refresh-help">
-          说明：你可以通过刷新按钮直接切换 IP，或者自行访问该刷新 URL 进行 IP 切换。任务启动时若该代理配置了刷新 URL，会先请求它换新 IP，再用这个代理执行。
+          说明：任务领代理时在池里随机选，并优先空闲代理，避免所有任务挤在一两路上。只有代理不够用时才会多人共用同一条；共用时若刚刷新过，或已有任务在用，就不会再刷 IP，避免把进行中的支付出口冲掉。
         </p>
         <div className="config-field-grid">
           <label>
@@ -2835,6 +2845,30 @@ function ProxyPanel({
               max={30000}
               value={waitMs}
               onChange={(event) => setWaitMs(event.target.value)}
+              className="asset-input"
+            />
+          </label>
+          <label>
+            每条代理同时任务数
+            <input
+              data-testid="proxy-max-concurrent"
+              type="number"
+              min={1}
+              max={20}
+              value={maxConcurrent}
+              onChange={(event) => setMaxConcurrent(event.target.value)}
+              className="asset-input"
+            />
+          </label>
+          <label>
+            刷新最短间隔（秒）
+            <input
+              data-testid="proxy-refresh-min-interval"
+              type="number"
+              min={0}
+              max={3600}
+              value={minIntervalSec}
+              onChange={(event) => setMinIntervalSec(event.target.value)}
               className="asset-input"
             />
           </label>

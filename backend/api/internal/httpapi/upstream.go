@@ -450,7 +450,7 @@ func (s *Server) activeUpstreamProxy(ctx context.Context) (string, string, error
 	if envProxyFallbackAllowed(err) {
 		value := strings.TrimSpace(firstNonEmpty(s.configValue("proxy", ""), s.Cfg.OutboundProxy))
 		if value == "" {
-			return "", "", errNoActiveProxy
+			return "", "", nil
 		}
 		return "", applyProxySession(value, strings.TrimPrefix(db.NewID("session"), "session_")), nil
 	}

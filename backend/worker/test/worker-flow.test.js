@@ -155,6 +155,30 @@ test("browser worker releases a claimed proxy and does not checkout with an empt
   assert.deepEqual(stores.filter((entry) => entry.action === "releaseProxy").map((entry) => entry.body.id), ["proxy_1"]);
 });
 
+test("browser worker runs checkout on the local IP when the proxy pool is empty", async () => {
+  let checkoutStarted = false;
+  const { updates, stores, api } = browserWorkerApi(async (action) => {
+    if (action === "getActiveProxy") return { proxy: "" };
+    return { ok: true };
+  });
+  const worker = new RechargeWorker({
+    api,
+    config: { workerId: "proxy-local-test", runtimeDir: ".", legacyMaxAttempts: 1 },
+    browserPool: {
+      async withBrowserSlot() {
+        checkoutStarted = true;
+        return { status: "succeeded", message: "ok", output: "PAYMENT_SUCCESS", analysis: { status: "success", shouldRetry: false } };
+      },
+    },
+  });
+
+  await worker.process({ taskId: "task_proxy_local", mode: "browser", traceId: "trace_proxy" });
+
+  assert.equal(checkoutStarted, true);
+  assert.equal(updates.at(-1).status, "succeeded");
+  assert.equal(stores.some((entry) => entry.action === "releaseProxy"), false);
+});
+
 test("dry-run worker completes with monotonic progress and trace propagation", async () => {
   const updates = [];
   const traces = [];

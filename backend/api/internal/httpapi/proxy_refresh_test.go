@@ -157,6 +157,33 @@ func TestClaimProxyFromListFailsWhenEveryRefreshFails(t *testing.T) {
 	}
 }
 
+func TestOrderProxiesForClaimSpreadsAcrossIdleProxies(t *testing.T) {
+	ordered := orderProxiesForClaim([]models.ProxyAsset{
+		{ID: "busy", InUse: true, InUseCount: 1},
+		{ID: "idle-b", InUse: false},
+		{ID: "idle-a", InUse: false},
+	}, nil)
+	if len(ordered) != 3 || ordered[0].ID == "busy" || ordered[2].ID != "busy" {
+		t.Fatalf("idle proxies should come before busy ones, got %#v", idsOf(ordered))
+	}
+	retry := orderProxiesForClaim([]models.ProxyAsset{
+		{ID: "busy", InUse: true, InUseCount: 1},
+		{ID: "prev", InUse: false},
+		{ID: "idle", InUse: false},
+	}, []string{"prev"})
+	if retry[0].ID != "idle" || retry[1].ID != "busy" || retry[2].ID != "prev" {
+		t.Fatalf("retry should still prefer a different idle proxy, got %#v", idsOf(retry))
+	}
+}
+
+func idsOf(rows []models.ProxyAsset) []string {
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.ID)
+	}
+	return out
+}
+
 func TestClaimProxyFromListPrefersUnusedProxyThenFallsBack(t *testing.T) {
 	refresh := func(string) error { return nil }
 	row, _, err := claimProxyFromList([]models.ProxyAsset{
@@ -213,11 +240,11 @@ func TestProxyStabilityViewAndAttemptColumns(t *testing.T) {
 }
 
 func TestProxyListSummaryIncludesRefreshSettings(t *testing.T) {
-	summary := proxyListSummary([]models.ProxyAsset{{Active: true}, {Active: false}}, 20, 800)
+	summary := proxyListSummary([]models.ProxyAsset{{Active: true}, {Active: false}}, 20, 800, 2, 120)
 	if summary["total"] != 2 || summary["active"] != 1 {
 		t.Fatalf("counts = %#v", summary)
 	}
-	if summary["refresh_timeout_seconds"] != 20 || summary["refresh_wait_ms"] != 800 {
+	if summary["refresh_timeout_seconds"] != 20 || summary["refresh_wait_ms"] != 800 || summary["max_concurrent"] != 2 || summary["refresh_min_interval_seconds"] != 120 {
 		t.Fatalf("refresh settings = %#v", summary)
 	}
 }
@@ -241,6 +268,43 @@ func TestApplyProxySessionReplacesPlaceholder(t *testing.T) {
 	got := applyProxySession("http://USER-session-{session}:PASS@proxy.example.com:1000", "zz9")
 	if got != "http://USER-session-zz9:PASS@proxy.example.com:1000" {
 		t.Fatalf("session proxy = %s", got)
+	}
+}
+
+func TestProxyNeedsRefreshUsesInterval(t *testing.T) {
+	if !proxyNeedsRefresh(nil, nil, 2*time.Minute) {
+		t.Fatal("never refreshed should refresh")
+	}
+	ok := true
+	recent := time.Now().Add(-10 * time.Second)
+	if proxyNeedsRefresh(&recent, &ok, 2*time.Minute) {
+		t.Fatal("recent successful refresh should be reused")
+	}
+	old := time.Now().Add(-5 * time.Minute)
+	if !proxyNeedsRefresh(&old, &ok, 2*time.Minute) {
+		t.Fatal("stale refresh should run again")
+	}
+	failed := false
+	if !proxyNeedsRefresh(&recent, &failed, 2*time.Minute) {
+		t.Fatal("failed refresh should retry even inside the interval")
+	}
+	if !proxyNeedsRefresh(&recent, &ok, 0) {
+		t.Fatal("zero interval should always refresh")
+	}
+}
+
+func TestProxyMaxConcurrentBounds(t *testing.T) {
+	if proxyMaxConcurrentValue("") != 2 || proxyMaxConcurrentValue("0") != 2 {
+		t.Fatalf("default max concurrent = %d", proxyMaxConcurrentValue(""))
+	}
+	if proxyMaxConcurrentValue("1") != 1 {
+		t.Fatalf("exclusive max concurrent = %d", proxyMaxConcurrentValue("1"))
+	}
+	if proxyMaxConcurrentValue("8") != 8 {
+		t.Fatalf("custom max concurrent = %d", proxyMaxConcurrentValue("8"))
+	}
+	if proxyMaxConcurrentValue("99") != 20 {
+		t.Fatalf("capped max concurrent = %d", proxyMaxConcurrentValue("99"))
 	}
 }
 
@@ -297,13 +361,13 @@ func TestTruncateProxyError(t *testing.T) {
 
 func TestEnvProxyFallbackOnlyWhenPoolEmpty(t *testing.T) {
 	if !envProxyFallbackAllowed(errNoActiveProxy) {
-		t.Fatal("empty pool should allow env fallback")
+		t.Fatal("empty pool should allow local IP or env proxy")
 	}
 	if envProxyFallbackAllowed(errProxyBusy) {
-		t.Fatal("busy pool must not fall back to env/direct proxy")
+		t.Fatal("busy pool must not fall back to local IP")
 	}
 	if envProxyFallbackAllowed(fmt.Errorf("代理刷新 IP 失败: %w", errors.New("down"))) {
-		t.Fatal("refresh failure must not fall back to env/direct proxy")
+		t.Fatal("refresh failure must not fall back to local IP")
 	}
 }
 

@@ -1059,7 +1059,7 @@ async function runRegistrationFlow() {
         }
     }
     if (!proxyValue) {
-        throw new Error('没有可用代理');
+        console.log("🌐 [系统] 代理池为空，使用本机出口直连。");
     }
 
     const hasOauth = Boolean(poolEmailId && rawPoolEmail && poolClientId && poolRefreshToken);

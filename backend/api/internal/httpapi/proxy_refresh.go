@@ -19,6 +19,7 @@ import (
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/db"
 	"github.com/kc-catk/auto-recharge-platform/backend/api/internal/models"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var (
@@ -306,6 +307,10 @@ func proxyExcludeIDs(input map[string]any) []string {
 	return out
 }
 
+func proxyIsIdle(row models.ProxyAsset) bool {
+	return !row.InUse || row.InUseCount <= 0
+}
+
 func orderProxiesForClaim(rows []models.ProxyAsset, excludeIDs []string) []models.ProxyAsset {
 	excluded := map[string]bool{}
 	for _, id := range excludeIDs {
@@ -313,16 +318,30 @@ func orderProxiesForClaim(rows []models.ProxyAsset, excludeIDs []string) []model
 			excluded[id] = true
 		}
 	}
-	preferred := make([]models.ProxyAsset, 0, len(rows))
-	rest := make([]models.ProxyAsset, 0, len(rows))
+	idle := make([]models.ProxyAsset, 0, len(rows))
+	busy := make([]models.ProxyAsset, 0, len(rows))
+	excludedIdle := make([]models.ProxyAsset, 0, len(rows))
+	excludedBusy := make([]models.ProxyAsset, 0, len(rows))
 	for _, row := range rows {
-		if excluded[row.ID] {
-			rest = append(rest, row)
-			continue
+		skip := excluded[row.ID]
+		free := proxyIsIdle(row)
+		switch {
+		case !skip && free:
+			idle = append(idle, row)
+		case !skip:
+			busy = append(busy, row)
+		case free:
+			excludedIdle = append(excludedIdle, row)
+		default:
+			excludedBusy = append(excludedBusy, row)
 		}
-		preferred = append(preferred, row)
 	}
-	return append(preferred, rest...)
+	out := make([]models.ProxyAsset, 0, len(rows))
+	out = append(out, idle...)
+	out = append(out, busy...)
+	out = append(out, excludedIdle...)
+	out = append(out, excludedBusy...)
+	return out
 }
 
 func claimProxyFromList(rows []models.ProxyAsset, refresh func(string) error, sessionID string, excludeIDs ...[]string) (models.ProxyAsset, string, error) {
@@ -423,21 +442,95 @@ func proxyLockOwner(owner string) string {
 	return owner
 }
 
-func (s *Server) tryLockProxyAsset(id, owner string) (bool, error) {
+func proxyMaxConcurrentValue(raw string) int {
+	parsed, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || parsed < 1 {
+		return 2
+	}
+	if parsed > 20 {
+		return 20
+	}
+	return parsed
+}
+
+func proxyRefreshMinIntervalValue(raw string) time.Duration {
+	parsed, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || parsed < 0 {
+		parsed = 120
+	}
+	if parsed > 3600 {
+		parsed = 3600
+	}
+	return time.Duration(parsed) * time.Second
+}
+
+func proxyNeedsRefresh(lastAt *time.Time, lastOK *bool, minInterval time.Duration) bool {
+	if lastAt == nil || lastAt.IsZero() {
+		return true
+	}
+	if lastOK != nil && !*lastOK {
+		return true
+	}
+	if minInterval <= 0 {
+		return true
+	}
+	return time.Since(*lastAt) >= minInterval
+}
+
+func (s *Server) proxyMaxConcurrent() int {
+	if s == nil {
+		return 2
+	}
+	return proxyMaxConcurrentValue(s.configValue("proxy_max_concurrent", "2"))
+}
+
+func (s *Server) proxyRefreshMinInterval() time.Duration {
+	if s == nil {
+		return 120 * time.Second
+	}
+	return proxyRefreshMinIntervalValue(s.configValue("proxy_refresh_min_interval_seconds", "120"))
+}
+
+func (s *Server) tryLockProxyAsset(id, owner string) (row models.ProxyAsset, firstSlot bool, err error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
-		return false, nil
+		return models.ProxyAsset{}, false, nil
 	}
-	now := time.Now()
-	cutoff := now.Add(-assetLockStaleAfter)
-	result := s.DB.Model(&models.ProxyAsset{}).
-		Where("id = ? AND active = ?", id, true).
-		Where("in_use = ? OR locked_at IS NULL OR locked_at < ?", false, cutoff).
-		Updates(map[string]any{"in_use": true, "locked_at": now, "locked_by": proxyLockOwner(owner)})
-	if result.Error != nil {
-		return false, result.Error
-	}
-	return result.RowsAffected == 1, nil
+	max := s.proxyMaxConcurrent()
+	err = s.DB.Transaction(func(tx *gorm.DB) error {
+		query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND active = ?", id, true).First(&row)
+		if query.Error == gorm.ErrRecordNotFound {
+			row = models.ProxyAsset{}
+			return nil
+		}
+		if query.Error != nil {
+			return query.Error
+		}
+		now := time.Now()
+		cutoff := now.Add(-assetLockStaleAfter)
+		count := row.InUseCount
+		if count < 0 || !row.InUse || row.LockedAt == nil || row.LockedAt.Before(cutoff) {
+			count = 0
+		}
+		if count >= max {
+			row = models.ProxyAsset{}
+			return nil
+		}
+		firstSlot = count == 0
+		count++
+		if err := tx.Model(&row).Updates(map[string]any{
+			"in_use_count": count,
+			"in_use":       true,
+			"locked_at":    now,
+			"locked_by":    proxyLockOwner(owner),
+		}).Error; err != nil {
+			return err
+		}
+		row.InUseCount = count
+		row.InUse = true
+		return nil
+	})
+	return row, firstSlot, err
 }
 
 func (s *Server) unlockProxyAsset(id string) error {
@@ -445,15 +538,34 @@ func (s *Server) unlockProxyAsset(id string) error {
 	if id == "" {
 		return nil
 	}
-	return s.DB.Model(&models.ProxyAsset{}).Where("id = ?", id).Updates(map[string]any{
-		"in_use": false, "locked_at": nil, "locked_by": "",
-	}).Error
+	return s.DB.Transaction(func(tx *gorm.DB) error {
+		var row models.ProxyAsset
+		query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", id).First(&row)
+		if query.Error == gorm.ErrRecordNotFound {
+			return nil
+		}
+		if query.Error != nil {
+			return query.Error
+		}
+		count := row.InUseCount - 1
+		if count < 0 {
+			count = 0
+		}
+		updates := map[string]any{"in_use_count": count, "in_use": count > 0}
+		if count == 0 {
+			updates["locked_at"] = nil
+			updates["locked_by"] = ""
+		}
+		return tx.Model(&row).Updates(updates).Error
+	})
 }
 
-func proxyListSummary(rows []models.ProxyAsset, timeoutSec, waitMs int) gin.H {
+func proxyListSummary(rows []models.ProxyAsset, timeoutSec, waitMs, maxConcurrent, minIntervalSec int) gin.H {
 	summary := proxySummary(rows)
 	summary["refresh_timeout_seconds"] = timeoutSec
 	summary["refresh_wait_ms"] = waitMs
+	summary["max_concurrent"] = maxConcurrent
+	summary["refresh_min_interval_seconds"] = minIntervalSec
 	return summary
 }
 
@@ -474,6 +586,7 @@ func (s *Server) claimActiveProxyFor(ctx context.Context, owner string, excludeI
 		ctx = context.Background()
 	}
 	timeout, wait, _, _ := s.proxyRefreshSettings()
+	minInterval := s.proxyRefreshMinInterval()
 	ctx, cancel := context.WithTimeout(ctx, proxyClaimDeadline(timeout, wait))
 	defer cancel()
 
@@ -493,18 +606,18 @@ func (s *Server) claimActiveProxyFor(ctx context.Context, owner string, excludeI
 	var lastErr error
 	triedRefresh := false
 	skippedBusy := false
-	for _, row := range rows {
+	for _, candidate := range rows {
 		if err := ctx.Err(); err != nil {
 			if lastErr != nil {
 				return "", "", fmt.Errorf("代理领取超时: %w", lastErr)
 			}
 			return "", "", fmt.Errorf("代理领取超时: %w", err)
 		}
-		locked, lockErr := s.tryLockProxyAsset(row.ID, owner)
+		row, firstSlot, lockErr := s.tryLockProxyAsset(candidate.ID, owner)
 		if lockErr != nil {
 			return "", "", lockErr
 		}
-		if !locked {
+		if row.ID == "" {
 			skippedBusy = true
 			continue
 		}
@@ -513,7 +626,9 @@ func (s *Server) claimActiveProxyFor(ctx context.Context, owner string, excludeI
 			return "", "", fmt.Errorf("代理领取超时: %w", err)
 		}
 		refreshURL := strings.TrimSpace(row.RefreshURL)
-		if refreshURL != "" {
+		// 别人正在用这条出口时绝不刷新，否则会把进行中的支付 IP 冲掉。
+		// 间隔内也不刷新，避免任务刚结束、下一个马上又刷一次。
+		if firstSlot && refreshURL != "" && proxyNeedsRefresh(row.LastRefreshAt, row.LastRefreshOK, minInterval) {
 			triedRefresh = true
 			if err := s.doProxyRefresh(ctx, client, refreshURL); err != nil {
 				lastErr = err
@@ -580,10 +695,9 @@ func (s *Server) claimActiveProxyPayload(ctx context.Context, input map[string]a
 	if err != nil {
 		if envProxyFallbackAllowed(err) {
 			proxyValue := strings.TrimSpace(firstNonEmpty(s.configValue("proxy", ""), s.Cfg.OutboundProxy))
-			if proxyValue == "" {
-				return nil, errNoActiveProxy
+			if proxyValue != "" {
+				proxyValue = applyProxySession(proxyValue, strings.TrimPrefix(db.NewID("session"), "session_"))
 			}
-			proxyValue = applyProxySession(proxyValue, strings.TrimPrefix(db.NewID("session"), "session_"))
 			return gin.H{"proxy": proxyValue, "proxy_url": proxyValue}, nil
 		}
 		return nil, err
