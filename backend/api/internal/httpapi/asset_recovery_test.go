@@ -44,6 +44,7 @@ func TestResetAssetLocksReleasesAllUnregisteredReservations(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id"}))
 	expectAssetUpdate(mock, "card_assets", `WHERE id = \$\d+ AND in_use = \$\d+`, false, nil, "", sqlmock.AnyArg(), "card-reset", true)
 	expectAssetUpdate(mock, "pool_emails", `WHERE registered = \$\d+ AND in_use = \$\d+`, false, nil, "", sqlmock.AnyArg(), false, true)
+	expectAssetUpdate(mock, "proxy_assets", `WHERE in_use = \$\d+`, false, nil, "", sqlmock.AnyArg(), true)
 	mock.ExpectCommit()
 
 	server := &Server{DB: db}
@@ -71,6 +72,7 @@ func TestReleaseStaleAssetLocksExcludesRegisteredMailboxes(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id"}))
 	expectAssetUpdate(mock, "card_assets", `WHERE id = \$\d+ AND in_use = \$\d+`, false, nil, "", sqlmock.AnyArg(), "card-stale", true)
 	expectAssetUpdate(mock, "pool_emails", `WHERE registered = \$\d+ AND in_use = \$\d+ AND \(locked_at IS NULL OR locked_at < \$\d+\)`, false, nil, "", sqlmock.AnyArg(), false, true, sqlmock.AnyArg())
+	expectAssetUpdate(mock, "proxy_assets", `WHERE in_use = \$\d+ AND \(locked_at IS NULL OR locked_at < \$\d+\)`, false, nil, "", sqlmock.AnyArg(), true, sqlmock.AnyArg())
 	mock.ExpectCommit()
 
 	server := &Server{DB: db}

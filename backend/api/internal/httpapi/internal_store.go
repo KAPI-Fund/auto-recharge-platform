@@ -143,7 +143,10 @@ func (s *Server) internalStore(c *gin.Context) {
 	case "verifyCdkDetails":
 		payload, err = s.internalVerifyCDK(stringValue(input, "code"))
 	case "getActiveProxy":
-		payload, err = s.claimActiveProxyPayload(input)
+		payload, err = s.claimActiveProxyPayload(c.Request.Context(), input)
+	case "releaseProxy":
+		err = s.unlockProxyAsset(firstNonEmpty(stringValue(input, "id"), stringValue(input, "proxyId"), stringValue(input, "proxyAssetId")))
+		payload = gin.H{"ok": err == nil}
 	case "recordProxyAttempt":
 		err = s.recordProxyAttempt(firstNonEmpty(stringValue(input, "id"), stringValue(input, "proxyId")), firstNonEmpty(stringValue(input, "outcome"), stringValue(input, "result")))
 		payload = gin.H{"ok": err == nil}
@@ -208,9 +211,9 @@ func (s *Server) internalStore(c *gin.Context) {
 	case "markPoolEmailRegistered":
 		payload, err = s.internalMarkPoolEmailRegistered(stringValue(input, "id"))
 	case "reserveRuntimeAssets":
-		payload, err = s.internalReserveRuntimeAssets(stringValue(input, "ownerKey"))
+		payload, err = s.internalReserveRuntimeAssets(c.Request.Context(), stringValue(input, "ownerKey"))
 	case "releaseRuntimeAssets":
-		payload, err = s.internalReleaseRuntimeAssets(stringValue(input, "phoneAssetId"), stringValue(input, "cardAssetId"))
+		payload, err = s.internalReleaseRuntimeAssets(stringValue(input, "phoneAssetId"), stringValue(input, "cardAssetId"), firstNonEmpty(stringValue(input, "proxyAssetId"), stringValue(input, "proxyId")))
 	case "deletePhoneAsset":
 		payload, err = s.internalDeletePhoneAsset(stringValue(input, "phone"))
 	case "deleteCardAsset":

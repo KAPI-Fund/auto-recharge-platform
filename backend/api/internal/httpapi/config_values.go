@@ -41,7 +41,7 @@ func normalizeModernConfigValues(input map[string]string) (map[string]string, er
 		"kimooxWebhookSecret": true, "kimooxCardBINIDs": true, "kimooxCardType": true, "kimooxPrepaidAmountMode": true, "kimooxPrepaidRechargeAmount": true,
 		"kimooxCardholderID": true, "kimooxHolderID": true, "kimooxCardGroupID": true, "kimooxBudgetID": true,
 		"kimooxWebhookToleranceSeconds": true, "kimooxApplyPollAttempts": true, "kimooxApplyPollIntervalSeconds": true,
-		"proxyRefreshTimeoutSeconds": true, "proxyRefreshWaitMs": true,
+		"proxyRefreshTimeoutSeconds": true, "proxyRefreshWaitMs": true, "proxyRefreshAllowPrivate": true,
 	}
 	for _, key := range []string{
 		"max_concurrent_activations", "max_background_concurrent", "maintenance_mode", "maintenance_mode_drain",
@@ -69,7 +69,7 @@ func normalizeModernConfigValues(input map[string]string) (map[string]string, er
 		"kimoox_apply_poll_attempts", "kimoox_apply_poll_interval_seconds",
 		"stripe_secret_key", "stripe_webhook_secret", "store_debug_mode", "stripe_success_url", "stripe_cancel_url", "public_base_url",
 		"mode", "upstreamBaseURL", "upstreamCreatePath", "upstreamStatusPath",
-		"proxy_refresh_timeout_seconds", "proxy_refresh_wait_ms",
+		"proxy_refresh_timeout_seconds", "proxy_refresh_wait_ms", "proxy_refresh_allow_private",
 	} {
 		allowed[key] = true
 	}
@@ -112,6 +112,7 @@ func normalizeModernConfigValues(input map[string]string) (map[string]string, er
 		"kimooxWebhookToleranceSeconds": "kimoox_webhook_tolerance_seconds", "kimooxApplyPollAttempts": "kimoox_apply_poll_attempts",
 		"kimooxApplyPollIntervalSeconds": "kimoox_apply_poll_interval_seconds",
 		"proxyRefreshTimeoutSeconds":     "proxy_refresh_timeout_seconds", "proxyRefreshWaitMs": "proxy_refresh_wait_ms",
+		"proxyRefreshAllowPrivate": "proxy_refresh_allow_private",
 	}
 
 	values := make(map[string]string, len(input))
@@ -237,6 +238,15 @@ func normalizeModernConfigValue(key, value string) (string, error) {
 			return "", fmt.Errorf("proxy_refresh_wait_ms 必须是 0-30000 的整数")
 		}
 		return strconv.Itoa(parsed), nil
+	case "proxy_refresh_allow_private":
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "1", "true", "yes", "on":
+			return "1", nil
+		case "0", "false", "no", "off", "":
+			return "0", nil
+		default:
+			return "", fmt.Errorf("proxy_refresh_allow_private 必须是 0 或 1")
+		}
 	case "kimoox_prepaid_recharge_amount":
 		parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
 		if err != nil || parsed <= 0 || parsed > 100000 {

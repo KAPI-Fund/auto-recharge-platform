@@ -509,6 +509,9 @@ type ProxyAsset struct {
 	Protocol         string     `gorm:"size:16" json:"protocol"`
 	Host             string     `gorm:"size:255" json:"host"`
 	Active           bool       `gorm:"index;not null;default:true" json:"active"`
+	InUse            bool       `gorm:"index;not null;default:false" json:"inUse"`
+	LockedAt         *time.Time `json:"lockedAt"`
+	LockedBy         string     `gorm:"size:96" json:"lockedBy"`
 	LastCheckAt      *time.Time `json:"lastCheckAt"`
 	LastCheckOK      *bool      `json:"lastCheckOk"`
 	LastCheckIP      string     `gorm:"size:64" json:"lastCheckIp"`

@@ -2,8 +2,11 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -28,6 +31,18 @@ func TestNormalizeRefreshURL(t *testing.T) {
 	}
 	if _, err := normalizeRefreshURL("not-a-url"); err == nil {
 		t.Fatal("hostless refresh URL should be rejected")
+	}
+	for _, blocked := range []string{
+		"http://127.0.0.1/refresh",
+		"http://localhost/refresh",
+		"http://10.0.0.8/refresh",
+		"http://192.168.1.1/refresh",
+		"http://169.254.169.254/latest/meta-data",
+		"http://[::1]/refresh",
+	} {
+		if _, err := normalizeRefreshURL(blocked); err == nil {
+			t.Fatalf("blocked refresh URL accepted: %s", blocked)
+		}
 	}
 }
 
@@ -226,5 +241,80 @@ func TestApplyProxySessionReplacesPlaceholder(t *testing.T) {
 	got := applyProxySession("http://USER-session-{session}:PASS@proxy.example.com:1000", "zz9")
 	if got != "http://USER-session-zz9:PASS@proxy.example.com:1000" {
 		t.Fatalf("session proxy = %s", got)
+	}
+}
+
+func TestProxyClaimDeadlineIsCapped(t *testing.T) {
+	if proxyClaimDeadline(15*time.Second, 0) != 30*time.Second {
+		t.Fatalf("default deadline = %s", proxyClaimDeadline(15*time.Second, 0))
+	}
+	if proxyClaimDeadline(60*time.Second, 30*time.Second) != proxyClaimDeadlineMax {
+		t.Fatalf("max deadline = %s", proxyClaimDeadline(60*time.Second, 30*time.Second))
+	}
+	if proxyClaimDeadline(time.Second, 0) != proxyClaimDeadlineMin {
+		t.Fatalf("min deadline = %s", proxyClaimDeadline(time.Second, 0))
+	}
+}
+
+func TestBlockedRefreshHostsAndIPs(t *testing.T) {
+	if !isBlockedRefreshHost("localhost") || !isBlockedRefreshHost("metadata.google.internal") {
+		t.Fatal("localhost/metadata hosts should be blocked")
+	}
+	if !isBlockedRefreshIP(net.ParseIP("127.0.0.1")) || !isBlockedRefreshIP(net.ParseIP("10.1.2.3")) || !isBlockedRefreshIP(net.ParseIP("169.254.169.254")) {
+		t.Fatal("loopback/private/link-local IPs should be blocked")
+	}
+	if !isBlockedRefreshIP(net.ParseIP("100.64.1.1")) {
+		t.Fatal("CGNAT IPs should be blocked")
+	}
+	if isBlockedRefreshIP(net.ParseIP("8.8.8.8")) {
+		t.Fatal("public IP should be allowed")
+	}
+}
+
+func TestNewProxyRefreshClientRejectsPrivateRedirect(t *testing.T) {
+	client := newProxyRefreshClient(2 * time.Second)
+	if client.CheckRedirect == nil {
+		t.Fatal("refresh client must inspect redirects")
+	}
+	req, err := http.NewRequest(http.MethodGet, "http://127.0.0.1/redirect", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.CheckRedirect(req, []*http.Request{req}); err == nil {
+		t.Fatal("redirect to loopback should be rejected")
+	}
+}
+
+func TestTruncateProxyError(t *testing.T) {
+	if truncateProxyError("  boom  ") != "boom" {
+		t.Fatalf("trim = %q", truncateProxyError("  boom  "))
+	}
+	long := strings.Repeat("e", proxyRefreshErrorMax+20)
+	if got := truncateProxyError(long); len(got) != proxyRefreshErrorMax {
+		t.Fatalf("truncated len = %d", len(got))
+	}
+}
+
+func TestEnvProxyFallbackOnlyWhenPoolEmpty(t *testing.T) {
+	if !envProxyFallbackAllowed(errNoActiveProxy) {
+		t.Fatal("empty pool should allow env fallback")
+	}
+	if envProxyFallbackAllowed(errProxyBusy) {
+		t.Fatal("busy pool must not fall back to env/direct proxy")
+	}
+	if envProxyFallbackAllowed(fmt.Errorf("代理刷新 IP 失败: %w", errors.New("down"))) {
+		t.Fatal("refresh failure must not fall back to env/direct proxy")
+	}
+}
+
+func TestFinishProxyClaimUnlocksWhenCallerGone(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	id, proxyURL, err := (&Server{}).finishProxyClaim(ctx, "", "http://proxy.example:1")
+	if err == nil || id != "" || proxyURL != "" {
+		t.Fatalf("canceled claim = %q %q %v", id, proxyURL, err)
+	}
+	if !strings.Contains(err.Error(), "代理领取超时") {
+		t.Fatalf("error = %v", err)
 	}
 }

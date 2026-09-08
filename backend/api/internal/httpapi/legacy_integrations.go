@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -44,10 +45,11 @@ func (s *Server) legacyListProxies(c *gin.Context) {
 func proxyResponse(row models.ProxyAsset) gin.H {
 	checkLabel, checkTone, ipText, latencyText := proxyCheckView(row)
 	refreshURL := strings.TrimSpace(row.RefreshURL)
+	maskedRefresh := maskProxy(refreshURL)
 	stabilityText, stabilityRate, scored := proxyStabilityView(row.SuccessCount, row.FailureCount)
 	return gin.H{
 		"id": row.ID, "proxy_url": row.ProxyURL, "proxy_url_masked": maskProxy(row.ProxyURL),
-		"refresh_url": refreshURL, "refresh_url_masked": maskProxy(refreshURL), "has_refresh_url": refreshURL != "",
+		"refresh_url": maskedRefresh, "refresh_url_masked": maskedRefresh, "has_refresh_url": refreshURL != "",
 		"label": row.Label, "protocol": row.Protocol, "host": row.Host, "is_active": row.Active,
 		"last_check_at": row.LastCheckAt, "last_check_ok": row.LastCheckOK, "last_check_ip": row.LastCheckIP,
 		"last_check_latency_ms": row.LastCheckLatency, "last_check_error": row.LastCheckError,
@@ -98,7 +100,7 @@ func (s *Server) legacyAddProxies(c *gin.Context) {
 	if len(values) == 0 {
 		values = []string{firstNonEmpty(stringValue(input, "proxy_url"), stringValue(input, "proxy"))}
 	}
-	refreshURL, err := normalizeRefreshURL(firstNonEmpty(stringValue(input, "refresh_url"), stringValue(input, "refreshUrl")))
+	refreshURL, err := s.normalizeStoredRefreshURL(firstNonEmpty(stringValue(input, "refresh_url"), stringValue(input, "refreshUrl")))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 		return
@@ -141,7 +143,12 @@ func (s *Server) legacyUpdateProxy(c *gin.Context) {
 		updates["active"] = input["is_active"] == true || stringValue(input, "is_active") == "1"
 	}
 	if _, ok := input["refresh_url"]; ok || input["refreshUrl"] != nil {
-		refreshURL, err := normalizeRefreshURL(firstNonEmpty(stringValue(input, "refresh_url"), stringValue(input, "refreshUrl")))
+		rawRefresh := firstNonEmpty(stringValue(input, "refresh_url"), stringValue(input, "refreshUrl"))
+		if strings.Contains(rawRefresh, "******") {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "刷新 URL 不能使用脱敏值覆盖"})
+			return
+		}
+		refreshURL, err := s.normalizeStoredRefreshURL(rawRefresh)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "error": err.Error()})
 			return
@@ -164,7 +171,8 @@ func (s *Server) legacyUpdateProxy(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "代理不存在"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "id": c.Param("id"), "is_active": updates["active"], "refresh_url": updates["refresh_url"]})
+	refreshURL, _ := updates["refresh_url"].(string)
+	c.JSON(http.StatusOK, gin.H{"success": true, "id": c.Param("id"), "is_active": updates["active"], "has_refresh_url": strings.TrimSpace(refreshURL) != ""})
 }
 
 func (s *Server) legacyRefreshProxy(c *gin.Context) {
@@ -179,19 +187,34 @@ func (s *Server) legacyRefreshProxy(c *gin.Context) {
 		return
 	}
 	timeout, wait, _, _ := s.proxyRefreshSettings()
-	err := requestProxyRefresh(&http.Client{Timeout: timeout}, refreshURL)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), proxyClaimDeadline(timeout, wait))
+	defer cancel()
+	err := s.doProxyRefresh(ctx, newProxyRefreshClient(timeout, s.allowPrivateRefreshURLs()), refreshURL)
 	now := time.Now()
 	ok := err == nil
 	errorText := ""
 	if err != nil {
 		errorText = err.Error()
 	}
-	updates := map[string]any{"last_refresh_at": now, "last_refresh_ok": ok, "last_refresh_error": errorText}
+	updates := map[string]any{"last_refresh_at": now, "last_refresh_ok": ok, "last_refresh_error": truncateProxyError(errorText)}
 	ip := ""
+	probeOK := false
 	if ok {
 		if wait > 0 {
-			time.Sleep(wait)
+			timer := time.NewTimer(wait)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				ok = false
+				errorText = "代理刷新等待超时"
+				updates["last_refresh_ok"] = false
+				updates["last_refresh_error"] = errorText
+			case <-timer.C:
+			}
+			timer.Stop()
 		}
+	}
+	if ok {
 		probe := proxyProbe(row.ProxyURL)
 		updates["last_check_at"] = now
 		updates["last_check_ok"] = probe.OK
@@ -199,6 +222,13 @@ func (s *Server) legacyRefreshProxy(c *gin.Context) {
 		updates["last_check_latency"] = probe.LatencyMs
 		updates["last_check_error"] = probe.Error
 		ip = probe.IP
+		probeOK = probe.OK
+		if !probe.OK {
+			ok = false
+			errorText = firstNonEmpty(probe.Error, "刷新后代理不可用")
+			updates["last_refresh_ok"] = false
+			updates["last_refresh_error"] = truncateProxyError(errorText)
+		}
 	}
 	if saveErr := s.DB.Model(&row).Updates(updates).Error; saveErr != nil {
 		fail(c, http.StatusInternalServerError, "保存代理刷新结果失败")
@@ -206,10 +236,14 @@ func (s *Server) legacyRefreshProxy(c *gin.Context) {
 	}
 	traceID := requestTraceID(c)
 	if !ok {
-		c.JSON(http.StatusBadGateway, gin.H{"success": false, "id": row.ID, "ok": false, "error": errorText, "traceId": traceID, "trace_id": traceID})
+		c.JSON(http.StatusBadGateway, gin.H{"success": false, "id": row.ID, "ok": false, "error": errorText, "ip": ip, "traceId": traceID, "trace_id": traceID})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "id": row.ID, "ok": true, "ip": ip, "traceId": traceID, "trace_id": traceID, "message": "已请求刷新 IP"})
+	if !probeOK {
+		c.JSON(http.StatusBadGateway, gin.H{"success": false, "id": row.ID, "ok": false, "error": errorText, "ip": ip, "traceId": traceID, "trace_id": traceID})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "id": row.ID, "ok": true, "ip": ip, "traceId": traceID, "trace_id": traceID, "message": "已刷新 IP"})
 }
 
 func (s *Server) legacyToggleProxy(c *gin.Context) {

@@ -74,6 +74,85 @@ test("proxy attempt outcome counts success and ignores unrelated failures", () =
   assert.equal(proxyAttemptOutcome({ errorCode: "session_invalid" }, "failed"), "");
   assert.equal(proxyAttemptOutcome({ errorCode: "card_declined" }, "manual"), "");
   assert.equal(proxyAttemptOutcome({ errorCode: "proxy_connection_failed" }, "failed"), "failure");
+  assert.equal(proxyAttemptOutcome({ errorCode: "proxy_unavailable" }, "failed"), "failure");
+});
+
+function browserWorkerApi(storeImpl) {
+  const updates = [];
+  const stores = [];
+  return {
+    updates,
+    stores,
+    api: {
+      setTraceId() {},
+      async claimTask() {
+        return { claimed: true, traceId: "trace_proxy", leaseToken: "lease_proxy", leaseTimeoutSeconds: 60 };
+      },
+      async heartbeatTask() {},
+      async updateTask(taskId, body) {
+        updates.push({ taskId, ...body });
+      },
+      async getTaskRuntime() {
+        return { traceId: "trace_proxy", jobKey: "job_proxy", mode: "browser" };
+      },
+      async getTaskSecret() {
+        return { traceId: "trace_proxy", jobKey: "job_proxy", session: "{}", token: "tok", planId: "plus" };
+      },
+      async getRuntimeConfig() {
+        return { config: {} };
+      },
+      async appendRuntimeLog() {},
+      async store(action, body = {}) {
+        stores.push({ action, body });
+        return storeImpl(action, body);
+      },
+    },
+  };
+}
+
+test("browser worker does not start checkout when proxy claim fails", async () => {
+  const { updates, stores, api } = browserWorkerApi(async (action) => {
+    if (action === "getActiveProxy") throw new Error("代理刷新 IP 失败");
+    return { ok: true };
+  });
+  const worker = new RechargeWorker({
+    api,
+    config: { workerId: "proxy-fail-test", runtimeDir: ".", legacyMaxAttempts: 1 },
+    browserPool: {
+      async withBrowserSlot() {
+        throw new Error("checkout must not start without a proxy");
+      },
+    },
+  });
+
+  await worker.process({ taskId: "task_proxy_fail", mode: "browser", traceId: "trace_proxy" });
+
+  assert.equal(updates.at(-1).status, "failed");
+  assert.equal(updates.at(-1).errorCode, "proxy_unavailable");
+  assert.equal(stores.some((entry) => entry.action === "getActiveProxy"), true);
+  assert.equal(stores.some((entry) => entry.action === "releaseProxy"), false);
+});
+
+test("browser worker releases a claimed proxy and does not checkout with an empty proxy URL", async () => {
+  const { updates, stores, api } = browserWorkerApi(async (action) => {
+    if (action === "getActiveProxy") return { id: "proxy_1", proxy: "" };
+    return { ok: true };
+  });
+  const worker = new RechargeWorker({
+    api,
+    config: { workerId: "proxy-empty-test", runtimeDir: ".", legacyMaxAttempts: 1 },
+    browserPool: {
+      async withBrowserSlot() {
+        throw new Error("checkout must not start with an empty proxy");
+      },
+    },
+  });
+
+  await worker.process({ taskId: "task_proxy_empty", mode: "browser", traceId: "trace_proxy" });
+
+  assert.equal(updates.at(-1).status, "failed");
+  assert.equal(updates.at(-1).errorCode, "proxy_unavailable");
+  assert.deepEqual(stores.filter((entry) => entry.action === "releaseProxy").map((entry) => entry.body.id), ["proxy_1"]);
 });
 
 test("dry-run worker completes with monotonic progress and trace propagation", async () => {

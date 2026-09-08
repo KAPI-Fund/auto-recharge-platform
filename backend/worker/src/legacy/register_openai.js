@@ -1049,12 +1049,17 @@ async function runRegistrationFlow() {
         return inboxEmailDomain || '';
     };
 
-    // 从后端数据库动态获取代理资产（仅取代理，不锁定手机/卡资产）
-    let proxyValue = '';
-    try {
-        proxyValue = await store.getActiveProxy();
-    } catch (e) {
-        console.warn(`⚠️  [系统] 无法从后端获取代理配置: ${e.message}`);
+    // 外层 Worker 已领取的代理优先，避免同一任务再刷新/换出口
+    let proxyValue = String(process.env.PROXY || '').trim();
+    if (!proxyValue) {
+        try {
+            proxyValue = String(await store.getActiveProxy() || '').trim();
+        } catch (e) {
+            throw new Error(`无法从后端获取代理配置: ${e.message}`);
+        }
+    }
+    if (!proxyValue) {
+        throw new Error('没有可用代理');
     }
 
     const hasOauth = Boolean(poolEmailId && rawPoolEmail && poolClientId && poolRefreshToken);

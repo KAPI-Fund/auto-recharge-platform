@@ -1,7 +1,7 @@
 package httpapi
 
 import (
-	"errors"
+	"context"
 	"strings"
 	"time"
 
@@ -56,7 +56,10 @@ func (s *Server) internalMarkPoolEmailRegistered(id string) (gin.H, error) {
 	return gin.H{"ok": result.Error == nil, "updated": result.RowsAffected}, result.Error
 }
 
-func (s *Server) internalReserveRuntimeAssets(ownerKey string) (gin.H, error) {
+func (s *Server) internalReserveRuntimeAssets(ctx context.Context, ownerKey string) (gin.H, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	ownerKey = strings.TrimSpace(ownerKey)
 	if ownerKey == "" {
 		ownerKey = "worker"
@@ -97,16 +100,30 @@ func (s *Server) internalReserveRuntimeAssets(ownerKey string) (gin.H, error) {
 	if err != nil {
 		return nil, err
 	}
-	proxyValue := firstNonEmpty(s.configValue("proxy", ""), s.Cfg.OutboundProxy)
-	if _, claimed, claimErr := s.claimActiveProxy(); claimErr == nil {
+	unlockReserved := func(proxyID string) {
+		s.unlockRuntimeAssets(phone.ID, card.ID, proxyID)
+	}
+	proxyID := ""
+	proxyValue := strings.TrimSpace(firstNonEmpty(s.configValue("proxy", ""), s.Cfg.OutboundProxy))
+	if phone.ID == "" || card.ID == "" {
+		if proxyValue != "" {
+			proxyValue = applyProxySession(proxyValue, strings.TrimPrefix(db.NewID("session"), "session_"))
+		}
+	} else if claimedID, claimed, claimErr := s.claimActiveProxyFor(ctx, ownerKey); claimErr == nil {
+		proxyID = claimedID
 		proxyValue = claimed
-	} else if !errors.Is(claimErr, errNoActiveProxy) {
-		return nil, claimErr
-	} else {
+	} else if envProxyFallbackAllowed(claimErr) {
+		if proxyValue == "" {
+			unlockReserved("")
+			return nil, claimErr
+		}
 		proxyValue = applyProxySession(proxyValue, strings.TrimPrefix(db.NewID("session"), "session_"))
+	} else {
+		unlockReserved("")
+		return nil, claimErr
 	}
 	result := gin.H{
-		"phoneAssetId": "", "cardAssetId": "",
+		"phoneAssetId": "", "cardAssetId": "", "proxyAssetId": proxyID,
 		"phone": gin.H{"phone": "未配置", "key": "", "usage_count": 0},
 		"card":  gin.H{"number": "", "expiry": "", "cvc": "", "usage_count": 0},
 		"proxy": proxyValue,
@@ -118,20 +135,17 @@ func (s *Server) internalReserveRuntimeAssets(ownerKey string) (gin.H, error) {
 	if card.ID != "" {
 		number, decryptErr := s.decryptSessionValue(card.CardNumberCiphertext)
 		if decryptErr != nil {
-			_ = s.DB.Model(&models.PhoneAsset{}).Where("id = ?", phone.ID).Updates(map[string]any{"in_use": false, "locked_at": nil, "locked_by": ""}).Error
-			_ = s.DB.Model(&models.CardAsset{}).Where("id = ?", card.ID).Updates(map[string]any{"in_use": false, "locked_at": nil, "locked_by": ""}).Error
+			unlockReserved(proxyID)
 			return nil, decryptErr
 		}
 		expiry, expiryErr := s.decryptSessionValue(card.ExpiryCiphertext)
 		if expiryErr != nil {
-			_ = s.DB.Model(&models.PhoneAsset{}).Where("id = ?", phone.ID).Updates(map[string]any{"in_use": false, "locked_at": nil, "locked_by": ""}).Error
-			_ = s.DB.Model(&models.CardAsset{}).Where("id = ?", card.ID).Updates(map[string]any{"in_use": false, "locked_at": nil, "locked_by": ""}).Error
+			unlockReserved(proxyID)
 			return nil, expiryErr
 		}
 		cvc, cvcErr := s.decryptSessionValue(card.CVVCiphertext)
 		if cvcErr != nil {
-			_ = s.DB.Model(&models.PhoneAsset{}).Where("id = ?", phone.ID).Updates(map[string]any{"in_use": false, "locked_at": nil, "locked_by": ""}).Error
-			_ = s.DB.Model(&models.CardAsset{}).Where("id = ?", card.ID).Updates(map[string]any{"in_use": false, "locked_at": nil, "locked_by": ""}).Error
+			unlockReserved(proxyID)
 			return nil, cvcErr
 		}
 		result["cardAssetId"] = card.ID
@@ -140,7 +154,24 @@ func (s *Server) internalReserveRuntimeAssets(ownerKey string) (gin.H, error) {
 	return result, nil
 }
 
-func (s *Server) internalReleaseRuntimeAssets(phoneID, cardID string) (gin.H, error) {
+func (s *Server) unlockRuntimeAssets(phoneID, cardID, proxyID string) {
+	updates := map[string]any{"in_use": false, "locked_at": nil, "locked_by": ""}
+	if phoneID != "" {
+		_ = s.DB.Model(&models.PhoneAsset{}).Where("id = ?", phoneID).Updates(updates).Error
+	}
+	if cardID != "" {
+		_ = s.DB.Model(&models.CardAsset{}).Where("id = ?", cardID).Updates(updates).Error
+	}
+	if proxyID != "" {
+		_ = s.unlockProxyAsset(proxyID)
+	}
+}
+
+func (s *Server) internalReleaseRuntimeAssets(phoneID, cardID string, proxyIDs ...string) (gin.H, error) {
+	proxyID := ""
+	if len(proxyIDs) > 0 {
+		proxyID = proxyIDs[0]
+	}
 	updates := map[string]any{"in_use": false, "locked_at": nil, "locked_by": ""}
 	if phoneID != "" {
 		if err := s.DB.Model(&models.PhoneAsset{}).Where("id = ?", phoneID).Updates(updates).Error; err != nil {
@@ -149,6 +180,11 @@ func (s *Server) internalReleaseRuntimeAssets(phoneID, cardID string) (gin.H, er
 	}
 	if cardID != "" {
 		if err := s.DB.Model(&models.CardAsset{}).Where("id = ?", cardID).Updates(updates).Error; err != nil {
+			return nil, err
+		}
+	}
+	if proxyID != "" {
+		if err := s.unlockProxyAsset(proxyID); err != nil {
 			return nil, err
 		}
 	}

@@ -190,6 +190,7 @@ func (s *Server) executeUpstreamTask(ctx context.Context, taskID, workerID, leas
 	topupCode := ""
 	var reservedCard *upstreamCard
 	proxy := ""
+	proxyID := ""
 	cardSettled := false
 	client := &http.Client{Timeout: 60 * time.Second}
 	settleCard := func(failureCode, failureMessage string) error {
@@ -255,6 +256,11 @@ func (s *Server) executeUpstreamTask(ctx context.Context, taskID, workerID, leas
 	}
 
 	defer func() {
+		if proxyID != "" {
+			if err := s.unlockProxyAsset(proxyID); err != nil {
+				_ = s.appendTaskRuntimeLog(task.ID, traceID, "warn", "upstream", "释放代理失败: "+err.Error(), workerID, leaseToken)
+			}
+		}
 		if reservedCard != nil && !cardSettled {
 			if err := settleCard("upstream_exception", "上游执行异常，已结束银行卡生命周期"); err != nil {
 				_ = s.appendTaskRuntimeLog(task.ID, traceID, "warn", "upstream", "释放银行卡失败: "+err.Error(), workerID, leaseToken)
@@ -275,7 +281,7 @@ func (s *Server) executeUpstreamTask(ctx context.Context, taskID, workerID, leas
 			return nil, fmt.Errorf("Session 格式或有效期检查失败: %s", upstreamDetail(inspect, "session_invalid"))
 		}
 		lastRaw = inspect
-		proxy, err = s.activeUpstreamProxy()
+		proxyID, proxy, err = s.activeUpstreamProxy(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("读取代理池失败: %w", err)
 		}
@@ -436,16 +442,19 @@ func (s *Server) queryUpstream(ctx context.Context, client *http.Client, config 
 	return doUpstreamJSON(ctx, client, http.MethodGet, joinUpstreamURL(config.baseURL, path), headers, nil)
 }
 
-func (s *Server) activeUpstreamProxy() (string, error) {
-	_, proxyURL, err := s.claimActiveProxy()
+func (s *Server) activeUpstreamProxy(ctx context.Context) (string, string, error) {
+	id, proxyURL, err := s.claimActiveProxyFor(ctx, "upstream")
 	if err == nil {
-		return proxyURL, nil
+		return id, proxyURL, nil
 	}
-	if !errors.Is(err, errNoActiveProxy) {
-		return "", err
+	if envProxyFallbackAllowed(err) {
+		value := strings.TrimSpace(firstNonEmpty(s.configValue("proxy", ""), s.Cfg.OutboundProxy))
+		if value == "" {
+			return "", "", errNoActiveProxy
+		}
+		return "", applyProxySession(value, strings.TrimPrefix(db.NewID("session"), "session_")), nil
 	}
-	value := firstNonEmpty(s.configValue("proxy", ""), s.Cfg.OutboundProxy)
-	return applyProxySession(value, strings.TrimPrefix(db.NewID("session"), "session_")), nil
+	return "", "", err
 }
 
 func (s *Server) reserveUpstreamCard(ctx context.Context, task models.RechargeTask, workerID, leaseToken, owner string) (*upstreamCard, error) {

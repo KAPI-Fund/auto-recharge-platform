@@ -2616,27 +2616,43 @@ function ProxyRefreshURLField({
   disabled: boolean;
   onSave: (value: string) => void;
 }) {
-  const [value, setValue] = useState(text(row, "refresh_url", ""));
+  const [value, setValue] = useState("");
   useEffect(() => {
-    setValue(text(row, "refresh_url", ""));
+    setValue("");
   }, [row]);
+  const masked = text(row, "refresh_url_masked", "");
+  const configured = bool(row, "has_refresh_url");
   return (
     <div className="flex min-w-[220px] flex-col gap-1">
+      <code className="break-all text-xs text-slate-500">{configured ? masked || "已配置" : "未配置"}</code>
       <input
         value={value}
         onChange={(event) => setValue(event.target.value)}
         className="asset-input text-xs"
-        placeholder="未配置"
+        placeholder={configured ? "输入新刷新 URL 以替换" : "https://..."}
         disabled={disabled}
+        autoComplete="off"
       />
-      <button
-        type="button"
-        className="self-start text-xs text-slate-500 underline"
-        disabled={disabled}
-        onClick={() => onSave(value)}
-      >
-        保存
-      </button>
+      <div className="flex gap-3">
+        <button
+          type="button"
+          className="self-start text-xs text-slate-500 underline"
+          disabled={disabled || !value.trim()}
+          onClick={() => onSave(value)}
+        >
+          保存
+        </button>
+        {configured ? (
+          <button
+            type="button"
+            className="self-start text-xs text-slate-500 underline"
+            disabled={disabled}
+            onClick={() => onSave("")}
+          >
+            清除
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }

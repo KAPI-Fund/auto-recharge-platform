@@ -102,9 +102,17 @@ export class ApiClient {
   }
 
   store(action, body = {}) {
-    return this.request(`/internal/store/${encodeURIComponent(action)}`, {
+    const options = {
       method: "POST",
       body: JSON.stringify(body),
-    });
+    };
+    if (action === "getActiveProxy" || action === "reserveRuntimeAssets") {
+      const controller = new AbortController();
+      const timeoutMs = Number(process.env.WORKER_API_TIMEOUT_MS || 60000);
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      options.signal = controller.signal;
+      return this.request(`/internal/store/${encodeURIComponent(action)}`, options).finally(() => clearTimeout(timer));
+    }
+    return this.request(`/internal/store/${encodeURIComponent(action)}`, options);
   }
 }

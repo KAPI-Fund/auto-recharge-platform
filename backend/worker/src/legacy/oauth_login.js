@@ -828,17 +828,22 @@ const store = require('./mysql-store');
 async function runFullProtocolFlow(email) {
     email = normalizeCloudEmail(email);
     // 阶段三代理检查（仅取代理，不锁定手机/卡资产）；失败则重新拉取配置并多轮重试
-    const maxProxyRounds = 5;
+    const assignedProxy = String(process.env.PROXY || '').trim();
+    const maxProxyRounds = assignedProxy ? 1 : 5;
     let proxyValue = '';
     let proxyOk = false;
     for (let round = 1; round <= maxProxyRounds; round += 1) {
         try {
-            proxyValue = await store.getActiveProxy();
+            proxyValue = assignedProxy || String(await store.getActiveProxy() || '').trim();
         } catch (e) {
             console.warn(`[!] [系统] 无法从后端获取代理配置: ${e.message}`);
+            proxyValue = assignedProxy;
+            if (!assignedProxy) {
+                throw new Error(`无法从后端获取代理配置: ${e.message}`);
+            }
         }
 
-        proxyOk = !proxyValue || (await checkProxyAvailability(proxyValue));
+        proxyOk = Boolean(proxyValue) && (await checkProxyAvailability(proxyValue));
         if (proxyOk) {
             break;
         }

@@ -80,6 +80,7 @@ function syncLegacyArtifacts(artifacts, runtimeDir) {
 const PROXY_FAILURE_CODES = new Set([
   "region_switch_failed",
   "proxy_connection_failed",
+  "proxy_unavailable",
   "blocked",
   "worker_retryable",
   "openai_auth_error",
@@ -475,46 +476,89 @@ export class RechargeWorker {
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
           await updateOwnedTask({ status: "running", progress: Math.min(8, 4 + attempt), message: `正在进行第 ${attempt}/${maxAttempts} 次尝试`, attempt });
           lease.assert();
-          const proxy = await this.api.store("getActiveProxy", { excludeIds: usedProxyIds }).catch(() => ({ proxy: "" }));
-          const proxyId = String(proxy.id || proxy.proxyId || "").trim();
+          let proxyId = "";
+          let proxyURL = "";
+          try {
+            const proxy = await this.api.store("getActiveProxy", { excludeIds: usedProxyIds, ownerKey: `${workerId || "worker"}:${taskId || ""}:${attempt}` });
+            proxyId = String(proxy.id || proxy.proxyId || "").trim();
+            proxyURL = String(proxy.proxy || proxy.proxy_url || "").trim();
+          } catch (error) {
+            if (isTaskLeaseError(error)) throw error;
+            const message = error instanceof Error ? error.message : "获取代理失败";
+            combinedOutput += `${combinedOutput ? "\n\n" : ""}===== ATTEMPT ${attempt} =====\n${message}`;
+            finalResult = {
+              status: "failed",
+              message,
+              output: combinedOutput,
+              analysis: { status: "retry", shouldRetry: true, errorCode: "proxy_unavailable", message },
+              attempt,
+            };
+            if (attempt >= maxAttempts) break;
+            await updateOwnedTask({ status: "running", progress: Math.min(90, 20 + attempt * 8), message, attempt, rawOutput: combinedOutput });
+            continue;
+          }
+          if (!proxyURL) {
+            if (proxyId) {
+              await this.api.store("releaseProxy", { id: proxyId }).catch(() => this.api.store("releaseProxy", { id: proxyId }).catch(() => undefined));
+              proxyId = "";
+            }
+            const message = "没有可用代理";
+            combinedOutput += `${combinedOutput ? "\n\n" : ""}===== ATTEMPT ${attempt} =====\n${message}`;
+            finalResult = {
+              status: "failed",
+              message,
+              output: combinedOutput,
+              analysis: { status: "retry", shouldRetry: true, errorCode: "proxy_unavailable", message },
+              attempt,
+            };
+            if (attempt >= maxAttempts) break;
+            await updateOwnedTask({ status: "running", progress: Math.min(90, 20 + attempt * 8), message, attempt, rawOutput: combinedOutput });
+            continue;
+          }
           if (proxyId && !usedProxyIds.includes(proxyId)) {
             usedProxyIds.push(proxyId);
           }
-          const resultSecret = { ...secret, proxy: proxy.proxy || proxy.proxy_url || "" };
-          const attemptResult = await runLegacy({
-            taskId,
-            jobKey: secret.jobKey || taskId,
-            secret: resultSecret,
-            taskContext: taskMeta,
-            config: runtimeConfig,
-            workerId,
-            leaseToken,
-            browserPool: this.browserPool,
-            signal: abortController.signal,
-            onLeaseLost: (error) => {
-              lease.markLost(error);
-              abortController.abort();
-            },
-            onProgress: updateProgress,
-            onLog: (text, source, level) => this.api.appendRuntimeLog({
+          try {
+            const resultSecret = { ...secret, proxy: proxyURL };
+            const attemptResult = await runLegacy({
               taskId,
               jobKey: secret.jobKey || taskId,
-              traceId: activeTraceId,
-              level,
-              source: `legacy/${source}`,
-              text,
+              secret: resultSecret,
+              taskContext: taskMeta,
+              config: runtimeConfig,
               workerId,
               leaseToken,
-            }).catch(() => undefined)
-          });
-          combinedOutput += `${combinedOutput ? "\n\n" : ""}===== ATTEMPT ${attempt}${attemptResult.cardLast4 ? ` | CARD ${attemptResult.cardLast4}` : ""} =====\n${attemptResult.output || ""}`;
-          finalResult = { ...attemptResult, attempt, output: combinedOutput };
-          const proxyOutcome = proxyAttemptOutcome(attemptResult.analysis, attemptResult.status);
-          if (proxyId && proxyOutcome) {
-            await this.api.store("recordProxyAttempt", { id: proxyId, outcome: proxyOutcome }).catch(() => undefined);
+              browserPool: this.browserPool,
+              signal: abortController.signal,
+              onLeaseLost: (error) => {
+                lease.markLost(error);
+                abortController.abort();
+              },
+              onProgress: updateProgress,
+              onLog: (text, source, level) => this.api.appendRuntimeLog({
+                taskId,
+                jobKey: secret.jobKey || taskId,
+                traceId: activeTraceId,
+                level,
+                source: `legacy/${source}`,
+                text,
+                workerId,
+                leaseToken,
+              }).catch(() => undefined)
+            });
+            combinedOutput += `${combinedOutput ? "\n\n" : ""}===== ATTEMPT ${attempt}${attemptResult.cardLast4 ? ` | CARD ${attemptResult.cardLast4}` : ""} =====\n${attemptResult.output || ""}`;
+            finalResult = { ...attemptResult, attempt, output: combinedOutput };
+            const proxyOutcome = proxyAttemptOutcome(attemptResult.analysis, attemptResult.status);
+            if (proxyId && proxyOutcome) {
+              await this.api.store("recordProxyAttempt", { id: proxyId, outcome: proxyOutcome }).catch(() => undefined);
+            }
+            if (attemptResult.status === "succeeded" || !attemptResult.analysis?.shouldRetry || attempt >= maxAttempts) break;
+            await updateOwnedTask({ status: "running", progress: Math.min(90, 20 + attempt * 8), message: attemptResult.analysis.message, attempt, rawOutput: combinedOutput });
+          } finally {
+            if (proxyId) {
+              await this.api.store("releaseProxy", { id: proxyId }).catch(() => this.api.store("releaseProxy", { id: proxyId }).catch(() => undefined));
+            }
           }
-          if (attemptResult.status === "succeeded" || !attemptResult.analysis?.shouldRetry || attempt >= maxAttempts) break;
-          await updateOwnedTask({ status: "running", progress: Math.min(90, 20 + attempt * 8), message: attemptResult.analysis.message, attempt, rawOutput: combinedOutput });
         }
         result = finalResult || { status: "failed", message: "原版 Worker 未返回结果", output: combinedOutput, analysis: { errorCode: "worker_empty_result" } };
       } else {

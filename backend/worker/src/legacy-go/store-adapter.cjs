@@ -69,9 +69,16 @@ function resolvePoolEmailId(id) {
   return value;
 }
 
+function storeTimeoutMs(action) {
+  const configured = Number(process.env.WORKER_API_TIMEOUT_MS || 0);
+  if (configured > 0) return configured;
+  if (action === 'getActiveProxy' || action === 'reserveRuntimeAssets') return 60000;
+  return 30000;
+}
+
 async function call(action, body = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Number(process.env.WORKER_API_TIMEOUT_MS || 30000));
+  const timeout = setTimeout(() => controller.abort(), storeTimeoutMs(action));
   try {
     const response = await fetch(`${baseUrl()}/api/v1/internal/store/${encodeURIComponent(action)}`, {
       method: 'POST',
@@ -163,7 +170,14 @@ const adapter = {
     return call('setAppConfigValue', { key, value });
   },
   async getActiveProxy() {
+    const assigned = String(process.env.PROXY || '').trim();
+    if (assigned) return assigned;
     return (await call('getActiveProxy')).proxy || '';
+  },
+  async releaseProxy(id) {
+    const proxyId = String(id || '').trim();
+    if (!proxyId) return { ok: true };
+    return call('releaseProxy', { id: proxyId });
   },
   async reserveCard(ownerKey) {
     const result = await call('reserveCard', cardReservationContext(String(ownerKey || '').trim()));
@@ -291,8 +305,8 @@ const adapter = {
   async reserveRuntimeAssets(ownerKey) {
     return call('reserveRuntimeAssets', { ownerKey });
   },
-  async releaseRuntimeAssets({ phoneAssetId = '', cardAssetId = '' } = {}) {
-    return call('releaseRuntimeAssets', { phoneAssetId, cardAssetId });
+  async releaseRuntimeAssets({ phoneAssetId = '', cardAssetId = '', proxyAssetId = '' } = {}) {
+    return call('releaseRuntimeAssets', { phoneAssetId, cardAssetId, proxyAssetId });
   },
   async deletePhoneAsset(phone) {
     return call('deletePhoneAsset', { phone });

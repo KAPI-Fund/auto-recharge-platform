@@ -150,8 +150,11 @@ func TestProxyAndAddressResponsesOwnOperationalPresentation(t *testing.T) {
 		t.Fatalf("unconfigured refresh view = %#v", proxy)
 	}
 	proxy = proxyResponse(models.ProxyAsset{ID: "proxy_refresh", ProxyURL: "http://user:secret@gw.example:1000", RefreshURL: "https://token:abc@ip.example.com/refresh"})
-	if proxy["has_refresh_url"] != true || proxy["refresh_url"] != "https://token:abc@ip.example.com/refresh" {
+	if proxy["has_refresh_url"] != true {
 		t.Fatalf("refresh url view = %#v", proxy)
+	}
+	if refreshURL, _ := proxy["refresh_url"].(string); strings.Contains(refreshURL, "abc") {
+		t.Fatalf("list API must not return the raw refresh URL, got %q", refreshURL)
 	}
 	masked, _ := proxy["refresh_url_masked"].(string)
 	if masked == "" || strings.Contains(masked, "abc") {

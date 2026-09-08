@@ -40,7 +40,7 @@ func main() {
 	if report, err := server.ResetAssetLocks(); err != nil {
 		log.Printf("asset lock startup reset failed: %v", err)
 	} else {
-		log.Printf("asset locks reset at startup: phone=%d card=%d pool_emails=%d", report.PhoneReleased, report.CardReleased, report.PoolReleased)
+		log.Printf("asset locks reset at startup: phone=%d card=%d pool_emails=%d proxies=%d", report.PhoneReleased, report.CardReleased, report.PoolReleased, report.ProxyReleased)
 	}
 	if cleaned, err := server.CleanupStaleProductGenerationTasks(); err != nil {
 		log.Printf("stale product task cleanup failed: %v", err)
@@ -95,8 +95,8 @@ func runMaintenanceLoop(ctx context.Context, server *httpapi.Server) {
 				log.Printf("stale asset lock cleanup failed: %v", err)
 				continue
 			}
-			if report.PhoneReleased > 0 || report.CardReleased > 0 || report.PoolReleased > 0 {
-				log.Printf("stale asset locks released: phone=%d card=%d pool_emails=%d", report.PhoneReleased, report.CardReleased, report.PoolReleased)
+			if report.PhoneReleased > 0 || report.CardReleased > 0 || report.PoolReleased > 0 || report.ProxyReleased > 0 {
+				log.Printf("stale asset locks released: phone=%d card=%d pool_emails=%d proxies=%d", report.PhoneReleased, report.CardReleased, report.PoolReleased, report.ProxyReleased)
 			}
 		}
 	}

@@ -71,12 +71,10 @@ func Run(opts Options) Result {
 	planType := region.NormalizePlanType(firstNonEmpty(store.Str(opts.Secret, "planType"), store.Str(opts.Secret, "planId"), "plus"))
 	proxy := strings.TrimSpace(store.Str(opts.Secret, "proxy"))
 	if proxy == "" {
-		proxy = opts.Config.Proxy
+		proxy = strings.TrimSpace(opts.Config.Proxy)
 	}
-	if proxy == "" && opts.Store != nil {
-		if data, err := opts.Store.Action("getActiveProxy", nil); err == nil {
-			proxy = store.Str(data, "proxy")
-		}
+	if proxy == "" {
+		return Result{Status: "retry", Message: "没有可用代理", ErrorCode: "proxy_unavailable"}
 	}
 
 	result.log(opts, 6, fmt.Sprintf("正在启动 Chrome 打开 chatgpt.com（代理 %s）。SOCKS 会先转本地中继，超时通常是代理或 DNS，不是页面卡住。", httpx.MaskProxy(proxy)))

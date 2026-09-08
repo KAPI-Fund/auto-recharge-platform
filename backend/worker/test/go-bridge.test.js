@@ -149,6 +149,29 @@ test("Go tax-free bridge preserves legacy address selection and generated fallba
   }
 });
 
+test("Go store getActiveProxy reuses the assigned PROXY instead of claiming again", async () => {
+  const server = createServer((_request, _response) => {
+    throw new Error("assigned proxy should not claim from API");
+  });
+  await listen(server);
+  const address = server.address();
+  const previous = {
+    api: process.env.API_BASE_URL,
+    proxy: process.env.PROXY,
+  };
+  process.env.API_BASE_URL = `http://127.0.0.1:${address.port}`;
+  process.env.PROXY = "http://assigned-proxy.example:9000";
+  try {
+    assert.equal(await store.getActiveProxy(), "http://assigned-proxy.example:9000");
+  } finally {
+    if (previous.api === undefined) delete process.env.API_BASE_URL;
+    else process.env.API_BASE_URL = previous.api;
+    if (previous.proxy === undefined) delete process.env.PROXY;
+    else process.env.PROXY = previous.proxy;
+    await close(server);
+  }
+});
+
 test("legacy screenshots and videos are copied into the Go runtime media root", () => {
   const sourceRoot = path.resolve("src/legacy/debug_screenshots");
   const relative = `contract-${randomUUID()}/sample.png`;

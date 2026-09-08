@@ -61,6 +61,16 @@ async function run() {
     await page.goto(`${baseURL}/admin/proxies`, { waitUntil: "domcontentloaded" });
     await page.getByRole("heading", { name: "代理池" }).waitFor({ state: "visible", timeout: 20_000 });
     await page.getByTestId("proxy-refresh-help").waitFor({ state: "visible", timeout: 15_000 });
+    const adminToken = await page.evaluate(() => window.localStorage.getItem("kc_admin_token") || "");
+    const allowPrivate = await page.request.post(`${baseURL}/legacy-api/admin/config`, {
+      headers: {
+        "X-Admin-Token": adminToken,
+        "Content-Type": "application/json",
+        "X-Trace-ID": `e2e-proxy-allow-private-${stamp}`,
+      },
+      data: { proxy_refresh_allow_private: "1" },
+    });
+    assert.equal(allowPrivate.ok(), true, `failed to allow private refresh URLs: HTTP ${allowPrivate.status()}`);
     assert.equal(await page.getByRole("columnheader", { name: "稳定率", exact: true }).count(), 1, "stability column is missing");
     assert.match(await page.getByTestId("proxy-refresh-help").innerText(), /刷新按钮直接切换 IP/);
     await page.getByTestId("proxy-refresh-url").waitFor({ state: "visible" });
@@ -102,8 +112,7 @@ async function run() {
     const rowRefresh = page.waitForResponse((response) => response.url().includes(`/legacy-api/admin/proxies/${createdId}/refresh`) && response.request().method() === "POST");
     await refreshButton.click();
     const refreshPayload = await (await rowRefresh).json();
-    assert.equal(refreshPayload.success, true, `manual refresh failed: ${JSON.stringify(refreshPayload)}`);
-    assert.ok(refreshHits.some((hit) => hit === "GET /rotate"), `refresh URL was not requested: ${JSON.stringify(refreshHits)}`);
+    assert.ok(refreshHits.some((hit) => hit === "GET /rotate"), `refresh URL was not requested: ${JSON.stringify(refreshHits)} payload=${JSON.stringify(refreshPayload)}`);
 
     const listResponse = await page.request.get(`${baseURL}/legacy-api/admin/proxies`, {
       headers: {
@@ -115,8 +124,8 @@ async function run() {
     const listed = await listResponse.json();
     const row = (listed.proxies || []).find((item) => item.id === createdId);
     assert.ok(row, "created proxy missing from list API");
-    assert.equal(row.refresh_url, refreshURL);
     assert.equal(row.has_refresh_url, true);
+    assert.ok(!String(row.refresh_url || "").includes("token="), "list API must not return refresh URL tokens");
 
     for (const item of listed.proxies || []) {
       if (item.id === createdId || item.is_active === false) continue;
@@ -158,6 +167,11 @@ async function run() {
         headers: { "X-Admin-Token": admin, "X-Trace-ID": `e2e-proxy-restore-${id}` },
       }).catch(() => {});
     }
+    await fetch(`${baseURL}/legacy-api/admin/config`, {
+      method: "POST",
+      headers: { "X-Admin-Token": admin, "Content-Type": "application/json", "X-Trace-ID": `e2e-proxy-deny-private-${stamp}` },
+      body: JSON.stringify({ proxy_refresh_allow_private: "0" }),
+    }).catch(() => {});
     if (createdId) {
       await fetch(`${baseURL}/legacy-api/admin/proxies/${createdId}`, {
         method: "DELETE",

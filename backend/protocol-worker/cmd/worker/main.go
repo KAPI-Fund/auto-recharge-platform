@@ -120,8 +120,27 @@ func process(ctx context.Context, cfg config.Config, api *store.Client, message 
 	result := flow.Result{Status: "failed"}
 	for attempt := 1; attempt <= cfg.MaxAttempts; attempt++ {
 		_ = api.Update(taskID, map[string]any{"status": "running", "progress": 6, "message": fmt.Sprintf("协议支付第 %d/%d 次", attempt, cfg.MaxAttempts), "workerId": workerID, "leaseToken": lease, "attempt": attempt})
-		proxy, _ := api.Action("getActiveProxy", nil)
-		secret["proxy"] = store.Str(proxy, "proxy")
+		proxy, err := api.Action("getActiveProxy", nil)
+		if err != nil {
+			result = flow.Result{Status: "retry", Message: err.Error(), ErrorCode: "proxy_unavailable"}
+			if attempt == cfg.MaxAttempts {
+				break
+			}
+			continue
+		}
+		proxyURL := strings.TrimSpace(store.Str(proxy, "proxy"))
+		proxyID := strings.TrimSpace(firstNonEmpty(store.Str(proxy, "id"), store.Str(proxy, "proxyId")))
+		if proxyURL == "" {
+			if proxyID != "" {
+				_, _ = api.Action("releaseProxy", map[string]any{"id": proxyID})
+			}
+			result = flow.Result{Status: "retry", Message: "没有可用代理", ErrorCode: "proxy_unavailable"}
+			if attempt == cfg.MaxAttempts {
+				break
+			}
+			continue
+		}
+		secret["proxy"] = proxyURL
 		if store.Str(secret, "region") == "" {
 			secret["region"] = cfg.PaymentRegion
 		}
@@ -134,6 +153,9 @@ func process(ctx context.Context, cfg config.Config, api *store.Client, message 
 				_ = api.Update(taskID, map[string]any{"status": "running", "progress": progress, "message": message, "workerId": workerID, "leaseToken": lease})
 			},
 		})
+		if proxyID != "" {
+			_, _ = api.Action("releaseProxy", map[string]any{"id": proxyID})
+		}
 		if result.Status != "retry" || attempt == cfg.MaxAttempts {
 			break
 		}

@@ -234,6 +234,10 @@ func TestNormalizeModernConfigInputAcceptsProxyRefreshSettings(t *testing.T) {
 	if values["proxy_refresh_timeout_seconds"] != "20" || values["proxy_refresh_wait_ms"] != "1500" {
 		t.Fatalf("proxy refresh settings = %#v", values)
 	}
+	private, err := normalizeModernConfigValues(map[string]string{"proxyRefreshAllowPrivate": "true"})
+	if err != nil || private["proxy_refresh_allow_private"] != "1" {
+		t.Fatalf("allow private = %#v %v", private, err)
+	}
 	if _, err := normalizeModernConfigValues(map[string]string{"proxy_refresh_timeout_seconds": "0"}); err == nil {
 		t.Fatal("timeout 0 should be rejected")
 	}

@@ -515,6 +515,7 @@ func seedPlans(database *gorm.DB) error {
 		"kimoox_apply_poll_interval_seconds":       "2",
 		"proxy_refresh_timeout_seconds":            "15",
 		"proxy_refresh_wait_ms":                    "0",
+		"proxy_refresh_allow_private":              "0",
 	}
 	for key, value := range defaults {
 		var existing models.AppConfig

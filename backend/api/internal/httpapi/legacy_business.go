@@ -120,7 +120,8 @@ func (s *Server) legacySaveConfig(c *gin.Context) {
 		"checkout_mode": true, "browser_pool_enabled": true, "browserCheckoutURL": true, "browserHeadless": true, "runtimeDir": true,
 		"pool_email_imap_host": true, "pool_email_imap_port": true, "pool_email_include_junk": true,
 		"recharge_queued_timeout_seconds": true, "recharge_task_lease_timeout_seconds": true,
-		"worker_log_level": true,
+		"worker_log_level":              true,
+		"proxy_refresh_timeout_seconds": true, "proxy_refresh_wait_ms": true, "proxy_refresh_allow_private": true,
 		"store_debug_mode": true, "stripe_success_url": true, "stripe_cancel_url": true, "public_base_url": true,
 		"email_enabled": true, "email_notify_purchase": true, "email_notify_redeem": true, "email_site_name": true,
 		"email_smtp_host": true, "email_smtp_port": true, "email_smtp_username": true, "email_smtp_from": true,
@@ -284,6 +285,30 @@ func (s *Server) legacySaveConfig(c *gin.Context) {
 				c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "kimoox_card_type 仅支持 PREPAID、BUDGET"})
 				return
 			}
+		case "proxy_refresh_timeout_seconds":
+			parsed, err := strconv.Atoi(strings.TrimSpace(value))
+			if err != nil || parsed < 1 || parsed > 60 {
+				c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "proxy_refresh_timeout_seconds 必须是 1-60 的整数"})
+				return
+			}
+			value = strconv.Itoa(parsed)
+		case "proxy_refresh_wait_ms":
+			parsed, err := strconv.Atoi(strings.TrimSpace(value))
+			if err != nil || parsed < 0 || parsed > 30000 {
+				c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "proxy_refresh_wait_ms 必须是 0-30000 的整数"})
+				return
+			}
+			value = strconv.Itoa(parsed)
+		case "proxy_refresh_allow_private":
+			switch strings.ToLower(strings.TrimSpace(value)) {
+			case "1", "true", "yes", "on":
+				value = "1"
+			case "0", "false", "no", "off", "":
+				value = "0"
+			default:
+				c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "proxy_refresh_allow_private 必须是 0 或 1"})
+				return
+			}
 		case "airwallex_form_factor":
 			value = strings.ToUpper(strings.TrimSpace(value))
 			if value != "VIRTUAL" && value != "PHYSICAL" {
@@ -349,6 +374,7 @@ func normalizeLegacyConfigInput(input map[string]any) map[string]any {
 		"publicBaseURL":                        "public_base_url",
 		"proxyRefreshTimeoutSeconds":           "proxy_refresh_timeout_seconds",
 		"proxyRefreshWaitMs":                   "proxy_refresh_wait_ms",
+		"proxyRefreshAllowPrivate":             "proxy_refresh_allow_private",
 		"emailEnabled":                         "email_enabled",
 		"emailNotifyPurchase":                  "email_notify_purchase",
 		"emailNotifyRedeem":                    "email_notify_redeem",

@@ -1484,10 +1484,11 @@ async function releaseAssetById(table, id) {
     );
 }
 
-async function releaseRuntimeAssets({ phoneAssetId, cardAssetId } = {}) {
+async function releaseRuntimeAssets({ phoneAssetId, cardAssetId, proxyAssetId } = {}) {
     const tasks = [];
     if (phoneAssetId) tasks.push(releaseAssetById('phone_assets', phoneAssetId));
     if (cardAssetId) tasks.push(releaseAssetById('card_assets', cardAssetId));
+    if (proxyAssetId) tasks.push(releaseAssetById('proxy_assets', proxyAssetId));
     if (tasks.length) {
         await Promise.all(tasks);
     }
@@ -1903,6 +1904,10 @@ async function migrateLegacyProxyConfig() {
 // 只取代理，不占用手机/卡资产；适合注册/协议提取这种只用代理的子流程
 // 支持 {session} 占位符；每次调用替换为新的随机 sticky session ID
 async function getActiveProxy() {
+    const assigned = String(process.env.PROXY || '').trim();
+    if (assigned) {
+        return assigned;
+    }
     const rows = await runQuery(
         `SELECT proxy_url
          FROM proxy_assets

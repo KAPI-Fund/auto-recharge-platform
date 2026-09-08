@@ -15,6 +15,7 @@ type AssetRecoveryReport struct {
 	PhoneReleased int64
 	CardReleased  int64
 	PoolReleased  int64
+	ProxyReleased int64
 }
 
 // ResetAssetLocks mirrors the legacy process-start recovery. Assets are
@@ -31,6 +32,9 @@ func (s *Server) ResetAssetLocks() (AssetRecoveryReport, error) {
 		}
 		if report.PoolReleased, err = clearLockedRows(tx, &models.PoolEmail{}, "registered = ? AND in_use = ?", false, true); err != nil {
 			return fmt.Errorf("reset pool email locks: %w", err)
+		}
+		if report.ProxyReleased, err = clearLockedRows(tx, &models.ProxyAsset{}, "in_use = ?", true); err != nil {
+			return fmt.Errorf("reset proxy asset locks: %w", err)
 		}
 		return nil
 	})
@@ -53,6 +57,9 @@ func (s *Server) ReleaseStaleAssetLocks() (AssetRecoveryReport, error) {
 		}
 		if report.PoolReleased, err = clearLockedRows(tx, &models.PoolEmail{}, "registered = ? AND "+where, false, true, cutoff); err != nil {
 			return fmt.Errorf("release stale pool email locks: %w", err)
+		}
+		if report.ProxyReleased, err = clearLockedRows(tx, &models.ProxyAsset{}, where, true, cutoff); err != nil {
+			return fmt.Errorf("release stale proxy asset locks: %w", err)
 		}
 		return nil
 	})

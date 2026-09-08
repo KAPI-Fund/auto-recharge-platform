@@ -901,7 +901,8 @@ async function startProductCreation(cdk, progressCallback, options = {}) {
                     // 没抢到就先把已抢到的退掉，然后等
                     await store.releaseRuntimeAssets({
                         phoneAssetId: runtimeAssets.phoneAssetId,
-                        cardAssetId: runtimeAssets.cardAssetId
+                        cardAssetId: runtimeAssets.cardAssetId,
+                        proxyAssetId: runtimeAssets.proxyAssetId
                     });
                     runtimeAssets = null;
                     progressCallback({
@@ -972,7 +973,8 @@ async function startProductCreation(cdk, progressCallback, options = {}) {
                     // 无论成功失败都先释放资产，避免占用残留
                     await store.releaseRuntimeAssets({
                         phoneAssetId: runtimeAssets.phoneAssetId,
-                        cardAssetId: runtimeAssets.cardAssetId
+                        cardAssetId: runtimeAssets.cardAssetId,
+                        proxyAssetId: runtimeAssets.proxyAssetId
                     }).catch((err) => console.warn(`[Product] release runtime assets failed: ${err.message}`));
                 }
 
