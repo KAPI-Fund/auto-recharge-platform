@@ -20,6 +20,11 @@ const {
     isCheckoutOverlayCaptchaVisible,
     hasAnyCheckoutCaptchaSignal
 } = require('./human-verification');
+const {
+    installCheckoutSubmitGuardInBrowser,
+    resetCheckoutSubmitGuardInBrowser,
+    clickVisibleCheckoutSubmitInBrowser
+} = require('./checkout-submit');
 
 // ==================== Helper Functions ====================
 
@@ -495,6 +500,7 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
     try {
         if (isCardRetry) {
             console.log(`[Stripe] 换卡重试 #${cardAttempt}：更换卡号并重新提交...`);
+            await page.evaluate(resetCheckoutSubmitGuardInBrowser).catch(() => {});
             await dismissCheckoutPaymentError(page);
             await prepareCheckoutCardSection(page);
             await page.waitForTimeout(800);
@@ -1499,8 +1505,11 @@ async function selectBillingComboboxItem(page, item, optionLabels, logLabel) {
 
         if (tag === 'input' || tag === 'textarea') {
             await item.el.fill(String(options[0] || ''));
-            await page.keyboard.press('ArrowDown').catch(() => { });
-            await page.keyboard.press('Enter').catch(() => { });
+            const listboxOpen = await page.getByRole('listbox').first().isVisible({ timeout: 400 }).catch(() => false);
+            if (listboxOpen) {
+                await page.keyboard.press('ArrowDown').catch(() => { });
+                await page.keyboard.press('Enter').catch(() => { });
+            }
             console.log(`  [Stripe] ✅ ${logLabel}: ${options[0]} (typeahead)`);
             return true;
         }
@@ -2503,6 +2512,13 @@ async function clickCheckoutSubmitButton(page) {
         window.scrollTo({ top: document.body.scrollHeight, behavior: 'instant' });
     });
     await page.waitForTimeout(400);
+
+    await page.evaluate(installCheckoutSubmitGuardInBrowser).catch(() => {});
+    const onceClick = await page.evaluate(clickVisibleCheckoutSubmitInBrowser).catch(() => null);
+    if (onceClick?.ok) {
+        console.log(`[Stripe] ✅ 已点击提交按钮 (once, matched=${onceClick.count})`);
+        return true;
+    }
 
     const tryClick = async (locator, label) => {
         try {

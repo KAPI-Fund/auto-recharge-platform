@@ -6,7 +6,7 @@
  * 支付逻辑：
  * 1. 获取当前地区和账单配置
  * 2. 选取免税地址
- * 3. 从卡池预留卡片，拒付时自动换卡（最多 PAYMENT_MAX_CARD_ATTEMPTS 次）
+ * 3. 从卡池预留卡片。LOCAL_TEXT 拒付可换下一张；Kimoox 等虚拟卡拒付后不再申请新卡。
  * 4. 成功 → 绑定地址/姓名到卡片、标记地址已绑定
  */
 
@@ -18,6 +18,24 @@ const { settleOneTimeCard, releaseCardReservation } = require('./card-lifecycle'
 
 const MAX_CARD_ATTEMPTS = Number(process.env.PAYMENT_MAX_CARD_ATTEMPTS) || 3;
 const MAX_AUTOMATION_ATTEMPTS = MAX_CARD_ATTEMPTS;
+
+function isProviderIssuedCard(card) {
+    const provider = String(card?.provider || '').trim().toUpperCase();
+    if (provider === 'LOCAL_TEXT') {
+        return false;
+    }
+    if (provider) {
+        return true;
+    }
+    return Boolean(String(card?.provider_card_id || card?.providerCardId || '').trim());
+}
+
+function shouldRotateToNextCard(card, cardAttempt, paymentResult = {}) {
+    if (isProviderIssuedCard(card)) {
+        return false;
+    }
+    return cardAttempt < MAX_CARD_ATTEMPTS && paymentResult.canRetryCard !== false;
+}
 
 function isPaymentDeclined(errorMsg) {
     if (!errorMsg) return false;
@@ -128,7 +146,7 @@ async function executePaymentWithRetry(page, options) {
         }
     } catch (_) { /* ignore */ }
 
-    progress(`开始支付（最多尝试 ${MAX_CARD_ATTEMPTS} 张卡）...`);
+    progress('开始支付（虚拟卡失败即停并记录，不再开新卡或重试支付）...');
 
 	for (let cardAttempt = 1; cardAttempt <= MAX_CARD_ATTEMPTS; cardAttempt += 1) {
 	    // The task is stable across duplicate Workers, while each card rotation
@@ -260,9 +278,12 @@ async function executePaymentWithRetry(page, options) {
 				cardHandled = settlement.accepted;
                 declinedLast4s.push(cardLast4);
 
-                if (cardAttempt < MAX_CARD_ATTEMPTS && paymentResult.canRetryCard !== false) {
+                if (shouldRotateToNextCard(card, cardAttempt, paymentResult)) {
                     progress(`卡 ...${cardLast4} 被拒，换上下一张卡 (${cardAttempt}/${MAX_CARD_ATTEMPTS})`);
                     continue;
+                }
+                if (isProviderIssuedCard(card)) {
+                    progress(`虚拟卡被拒，不再申请新卡 (...${cardLast4})`);
                 }
 
                 const summary = declinedLast4s.length > 1
@@ -348,6 +369,8 @@ async function executePaymentWithRetry(page, options) {
 module.exports = {
     executePaymentWithRetry,
     isPaymentDeclined,
+    isProviderIssuedCard,
+    shouldRotateToNextCard,
     MAX_AUTOMATION_ATTEMPTS,
     MAX_CARD_ATTEMPTS
 };
