@@ -201,6 +201,10 @@ type ProviderConfigKey =
 const visibleCardProviders = ["LOCAL_TEXT", "KIMOOX"] as const;
 const visibleCardProvider = "KIMOOX" as const;
 
+function creatableProviderOptions(providerRows: Row[]) {
+  return providerRows.filter((provider) => bool(provider, "enabled") && bool(provider, "canCreate"));
+}
+
 const inputClass =
   "asset-input mt-2 h-10 w-full rounded-md border border-slate-200 bg-slate-50 px-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400 focus:bg-white";
 const areaClass =
@@ -3512,14 +3516,12 @@ function CardsPanel({
       setCardRows(rows(result.cards));
       setCardMeta(asRow(result.stats));
       const nextPools = rows(poolResult.pools);
-      const nextProviderRows = rows(poolResult.providers).filter((provider) => text(provider, "provider").toUpperCase() === visibleCardProvider);
+      const nextProviderRows = rows(poolResult.providers).filter((provider) => visibleCardProviders.includes(text(provider, "provider").toUpperCase() as typeof visibleCardProviders[number]));
       setPoolRows(nextPools);
       setProviderRows(nextProviderRows);
       setCreateForm((current) => {
         const selectedPoolId = current.poolId || text(nextPools[0], "id", "");
-        const selectedPool = nextPools.find((pool) => text(pool, "id") === selectedPoolId);
-        const configuredProviders = new Set(rows(rowValue(selectedPool, "providers")).map((provider) => text(provider, "provider").toUpperCase()).filter(Boolean));
-        const availableProviders = nextProviderRows.filter((provider) => bool(provider, "enabled") && bool(provider, "canCreate") && (configuredProviders.size === 0 || configuredProviders.has(text(provider, "provider").toUpperCase())));
+        const availableProviders = creatableProviderOptions(nextProviderRows);
         return {
           ...current,
           poolId: selectedPoolId,
@@ -3582,12 +3584,7 @@ function CardsPanel({
       setCreating(false);
     }
   };
-  const providersForPool = (poolId: string) => {
-    const selectedPool = poolRows.find((pool) => text(pool, "id") === poolId);
-    const configuredProviders = new Set(rows(rowValue(selectedPool, "providers")).map((provider) => text(provider, "provider").toUpperCase()).filter(Boolean));
-    return providerRows.filter((provider) => text(provider, "provider").toUpperCase() === visibleCardProvider && bool(provider, "enabled") && bool(provider, "canCreate") && (configuredProviders.size === 0 || configuredProviders.has(text(provider, "provider").toUpperCase())));
-  };
-  const creatableProviders = providersForPool(createForm.poolId);
+  const creatableProviders = creatableProviderOptions(providerRows);
   const isVirtualProviderCard = (row: Row) => {
     const provider = text(row, "provider", "LOCAL_TEXT").toUpperCase();
     const providerCardId = text(row, "provider_card_id", text(row, "providerCardId"));
@@ -3646,8 +3643,8 @@ function CardsPanel({
           <div className="import-box-header"><div className="import-box-title">通过 Provider 创建虚拟卡</div></div>
           <p className="import-box-tip">创建成功后只保存卡片元数据；完整卡号、有效期和 CVC 只会在真实支付前由后端临时读取。</p>
           <div className="config-field-grid">
-            <label>卡池<select value={createForm.poolId} onChange={(event) => { const poolId = event.target.value; const available = providersForPool(poolId); setCreateForm((current) => ({ ...current, poolId, provider: available.some((provider) => text(provider, "provider").toUpperCase() === current.provider.toUpperCase()) ? current.provider : text(available[0], "provider", "") })); }} className="asset-input"><option value="">请选择卡池</option>{poolRows.map((pool) => <option key={text(pool, "id")} value={text(pool, "id")}>{text(pool, "name", text(pool, "id"))}</option>)}</select></label>
-            <label>Provider<select value={createForm.provider} onChange={(event) => setCreateForm({ ...createForm, provider: event.target.value })} className="asset-input"><option value="">请选择 Provider</option>{creatableProviders.map((provider) => <option key={text(provider, "provider")} value={text(provider, "provider")}>{text(provider, "provider")}</option>)}</select></label>
+            <label>卡池<select value={createForm.poolId} onChange={(event) => { const poolId = event.target.value; setCreateForm((current) => ({ ...current, poolId, provider: creatableProviders.some((provider) => text(provider, "provider").toUpperCase() === current.provider.toUpperCase()) ? current.provider : text(creatableProviders[0], "provider", "") })); }} className="asset-input"><option value="">请选择卡池</option>{poolRows.map((pool) => <option key={text(pool, "id")} value={text(pool, "id")}>{text(pool, "name", text(pool, "id"))}</option>)}</select></label>
+            <label>Provider<select value={createForm.provider} onChange={(event) => setCreateForm({ ...createForm, provider: event.target.value })} className="asset-input"><option value="">请选择 Provider</option>{creatableProviders.map((provider) => <option key={text(provider, "provider")} value={text(provider, "provider")}>{text(provider, "provider")}</option>)}</select><p className="config-help">与系统配置里已启用、且支持发卡的 Provider 一致。LOCAL_TEXT 请用批量导入，不走这里开卡。</p></label>
             <label>用途<select value="ONE_TIME" disabled className="asset-input"><option value="ONE_TIME">ONE_TIME 一次性</option></select><p className="config-help">充值卡统一一次性使用；任务完成或失败后都会销毁，不能再次分配。</p></label>
             <label>首充金额（USD）<input type="number" min={0.01} step="0.01" value={createForm.amount} onChange={(event) => setCreateForm({ ...createForm, amount: event.target.value })} className="asset-input" placeholder="必填" /></label>
             <label>币种<input value={createForm.currency} onChange={(event) => setCreateForm({ ...createForm, currency: event.target.value })} className="asset-input" maxLength={3} /></label>
