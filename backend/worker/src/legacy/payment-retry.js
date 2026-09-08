@@ -83,7 +83,14 @@ async function resolveBilledAmountForRecord(page, paymentResult, preTaxAmount, c
  * @returns {Promise<{ success: boolean, error?: string, cardLast4?: string, manualIntervention?: boolean, screenshots?: string[] }>}
  */
 async function executePaymentWithRetry(page, options) {
-    const { planType, cdkCode, email, onProgress, stripeSessionId } = options || {};
+    const { planType, cdkCode, email, onProgress, stripeSessionId, deps = {} } = options || {};
+    const db = deps.store || store;
+    const payCard = deps.completeStripeCardPayment || completeStripeCardPayment;
+    const readDue = deps.readCheckoutDueAmount || readCheckoutDueAmount;
+    const pickAddress = deps.pickBillingAddressForCheckout || pickBillingAddressForCheckout;
+    const markBound = deps.markAddressBound || markAddressBound;
+    const settleCard = deps.settleOneTimeCard || settleOneTimeCard;
+    const releaseReservation = deps.releaseCardReservation || releaseCardReservation;
 
     const progress = (msg) => {
         console.log(`[PaymentRetry] ${msg}`);
@@ -93,7 +100,7 @@ async function executePaymentWithRetry(page, options) {
     };
 
     const regionOverride = String(process.env.PAYMENT_REGION_OVERRIDE || '').trim().toUpperCase();
-    const region = regionOverride || await store.getPaymentRegion();
+    const region = regionOverride || await db.getPaymentRegion();
     const regionConfig = getRegionConfig(region);
     if (!regionConfig) {
         return { success: false, error: '不支持的支付地区配置' };
@@ -101,10 +108,10 @@ async function executePaymentWithRetry(page, options) {
     const { currency } = regionConfig;
     progress(`支付地区: ${region}, 币种: ${currency}`);
 
-    const lastUsedIdRaw = await store.getAppConfigValue('last_used_address_id', null);
+    const lastUsedIdRaw = await db.getAppConfigValue('last_used_address_id', null);
     const lastUsedId = lastUsedIdRaw ? Number(lastUsedIdRaw) : null;
 
-    const address = await pickBillingAddressForCheckout(lastUsedId);
+    const address = await pickAddress(lastUsedId);
     const addressSource = address.generated ? '随机生成' : `地址池 #${address.id}`;
     progress(`已选取美国免税账单地址 (${addressSource}): ${address.line1}, ${address.city}, ${address.state}`);
 
@@ -123,7 +130,7 @@ async function executePaymentWithRetry(page, options) {
 	let billedCurrency = currency;
 
     const settleAttempt = async (card, outcome = {}) => {
-        const result = await settleOneTimeCard(store, card, outcome);
+        const result = await settleCard(db, card, outcome);
         if (!result.ok) {
             progress(`卡片收尾未完全成功${result.error ? `: ${result.error.message}` : ''}，Go 卡池会继续保留待销毁状态`);
         }
@@ -131,14 +138,14 @@ async function executePaymentWithRetry(page, options) {
     };
 
     const releaseAttemptReservation = async (card) => {
-        const result = await releaseCardReservation(store, card);
+        const result = await releaseReservation(db, card);
         if (!result.ok) {
             progress(`卡片预留释放失败: ${result.error?.message || '未知错误'}，保留当前卡片待人工/恢复处理`);
         }
         return result;
     };
     try {
-        const due = await readCheckoutDueAmount(page);
+        const due = await readDue(page);
         if (due?.amount) {
             billedAmount = due.amount;
             if (due.currency) billedCurrency = due.currency;
@@ -152,11 +159,11 @@ async function executePaymentWithRetry(page, options) {
 	    // The task is stable across duplicate Workers, while each card rotation
 	    // gets a distinct idempotency key so a declined card can be replaced.
 	    const ownerKey = `${baseOwnerKey}:attempt:${cardAttempt}`;
-	    const card = await store.reserveCard(ownerKey);
+	    const card = await db.reserveCard(ownerKey);
         if (!card) {
             progress(cardAttempt === 1 ? '卡池无可用卡，终止支付' : `卡池已无更多可用卡（已拒 ${declinedLast4s.length} 张）`);
             if (cardAttempt === 1) {
-                await store.createBillingRecord({
+                await db.createBillingRecord({
                     card_last4: '----',
                     amount: billedAmount,
                     currency: billedCurrency,
@@ -188,7 +195,7 @@ async function executePaymentWithRetry(page, options) {
         const allocationId = String(card.allocationId || card.allocation_id || '').trim();
 
         try {
-            const paymentResult = await completeStripeCardPayment(page, cardInfo, address, {
+            const paymentResult = await payCard(page, cardInfo, address, {
                 cardAttempt,
                 holderName: billingHolderName,
                 planType
@@ -213,13 +220,13 @@ async function executePaymentWithRetry(page, options) {
 
                 const holderName = paymentResult.holderName || card.card_holder || billingHolderName || '';
 				const allocationId = String(card.allocationId || card.allocation_id || '').trim();
-				await store.bindCardPaymentProfile(card.id, { holderName, address });
+				await db.bindCardPaymentProfile(card.id, { holderName, address });
                 if (address.id) {
-                    await markAddressBound(address.id, card.id);
+                    await markBound(address.id, card.id);
                 }
 				const settlement = await settleAttempt(card);
 				cardHandled = settlement.accepted;
-                await store.createBillingRecord({
+                await db.createBillingRecord({
 					card_last4: cardLast4,
 					payment_card_id: card.id,
 					card_allocation_id: allocationId,
@@ -256,7 +263,7 @@ async function executePaymentWithRetry(page, options) {
                     ? 'captcha_required'
                     : 'payment_failed';
             if (declined) {
-                await store.createBillingRecord({
+                await db.createBillingRecord({
 					card_last4: cardLast4,
 					payment_card_id: card.id,
 					card_allocation_id: String(card.allocationId || card.allocation_id || '').trim(),
@@ -308,7 +315,7 @@ async function executePaymentWithRetry(page, options) {
                 : failureCode === 'captcha_required'
                     ? 'captcha_required'
                     : 'automation_blocked';
-            await store.createBillingRecord({
+            await db.createBillingRecord({
 				card_last4: cardLast4,
 				payment_card_id: card.id,
 				card_allocation_id: String(card.allocationId || card.allocation_id || '').trim(),
@@ -329,7 +336,7 @@ async function executePaymentWithRetry(page, options) {
             // No confirmed success or decline: hCaptcha / 表单失败 / 提交后无终态
             // 都不能把卡留在 IN_USE。扣款未确认时只释放预留，不记使用、不销卡。
             try {
-                await store.recordCardFailure(card.id, allocationId, automationFailureCode, lastError);
+                await db.recordCardFailure(card.id, allocationId, automationFailureCode, lastError);
             } catch (_) { /* diagnostics only */ }
             const released = await releaseAttemptReservation(card);
             cardHandled = released.accepted;
