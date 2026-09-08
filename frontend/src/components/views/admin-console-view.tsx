@@ -3749,7 +3749,7 @@ function CardsPanel({
                 仅删除本地记录
               </Button>
               <Button variant="danger" disabled={deletingCard} onClick={() => void executeDelete(virtualDeleteRow, true)}>
-                同时调用 API 销卡（收费）
+                同时调用 API 销卡
               </Button>
             </div>
           </div>
