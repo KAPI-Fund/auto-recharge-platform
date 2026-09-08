@@ -119,6 +119,7 @@ import {
   getPoolEmails,
   getProducts,
   getProxies,
+  refreshProxy,
   getPublicAdminPaths,
   getRegion,
   getRuntimeLogs,
@@ -148,6 +149,7 @@ import {
   testHcaptcha,
   testAllProxies,
   testProxy,
+  updateProxy,
   testTelegram,
   triggerActivation,
   toggleProxy,
@@ -2605,6 +2607,40 @@ function ConfigPanel({
     </div>
   );
 }
+function ProxyRefreshURLField({
+  row,
+  disabled,
+  onSave,
+}: {
+  row: Row;
+  disabled: boolean;
+  onSave: (value: string) => void;
+}) {
+  const [value, setValue] = useState(text(row, "refresh_url", ""));
+  useEffect(() => {
+    setValue(text(row, "refresh_url", ""));
+  }, [row]);
+  return (
+    <div className="flex min-w-[220px] flex-col gap-1">
+      <input
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        className="asset-input text-xs"
+        placeholder="未配置"
+        disabled={disabled}
+      />
+      <button
+        type="button"
+        className="self-start text-xs text-slate-500 underline"
+        disabled={disabled}
+        onClick={() => onSave(value)}
+      >
+        保存
+      </button>
+    </div>
+  );
+}
+
 function ProxyPanel({
   proxyRows,
   setProxyRows,
@@ -2615,12 +2651,24 @@ function ProxyPanel({
   confirm,
 }: ContentProps) {
   const [input, setInput] = useState("");
+  const [refreshURL, setRefreshURL] = useState("");
+  const [timeoutSec, setTimeoutSec] = useState("15");
+  const [waitMs, setWaitMs] = useState("0");
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    const nextTimeout = text(proxyMeta, "refresh_timeout_seconds");
+    const nextWait = text(proxyMeta, "refresh_wait_ms");
+    if (nextTimeout) setTimeoutSec(nextTimeout);
+    if (nextWait || nextWait === "0") setWaitMs(nextWait || "0");
+  }, [proxyMeta]);
   const refresh = async () => {
     try {
       const result = asRow(await getProxies());
       setProxyRows(rows(result.proxies));
-      setProxyMeta(asRow(result.summary));
+      const summary = asRow(result.summary);
+      setProxyMeta(summary);
+      setTimeoutSec(text(summary, "refresh_timeout_seconds", "15"));
+      setWaitMs(text(summary, "refresh_wait_ms", "0"));
     } catch (reason) {
       setError(errorMessage(reason));
     }
@@ -2628,9 +2676,49 @@ function ProxyPanel({
   const add = async () => {
     setBusy(true);
     try {
-      const result = asRow(await addProxies({ proxies: input }));
+      const result = asRow(await addProxies({ proxies: input, refresh_url: refreshURL }));
       setNotice(text(result, "message", "代理已保存"));
       setInput("");
+      await refresh();
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const saveRefreshSettings = async () => {
+    setBusy(true);
+    try {
+      await saveConfig({
+        proxy_refresh_timeout_seconds: timeoutSec,
+        proxy_refresh_wait_ms: waitMs,
+      });
+      setNotice("代理刷新配置已保存");
+      await refresh();
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const saveRowRefreshURL = async (row: Row, value: string) => {
+    try {
+      await updateProxy(text(row, "id"), { refresh_url: value });
+      setNotice("刷新 URL 已保存");
+      await refresh();
+    } catch (reason) {
+      setError(errorMessage(reason));
+    }
+  };
+  const rotateIP = async (row: Row) => {
+    setBusy(true);
+    try {
+      const result = asRow(await refreshProxy(text(row, "id")));
+      setNotice(
+        bool(result, "ok")
+          ? `已刷新 IP${text(result, "ip") ? `：${text(result, "ip")}` : ""}`
+          : text(result, "error", "刷新 IP 失败"),
+      );
       await refresh();
     } catch (reason) {
       setError(errorMessage(reason));
@@ -2696,12 +2784,55 @@ function ProxyPanel({
           className="proxy-area asset-input"
           placeholder={'一行一条，例如：\nhttp://user:pass@host:port\nsocks5://user:pass@host:port\nhttp://USER-session-{session}:PASS@proxy.example.com:1000'}
         />
+        <label className="config-field-spaced">
+          刷新 URL
+          <input
+            data-testid="proxy-refresh-url"
+            value={refreshURL}
+            onChange={(event) => setRefreshURL(event.target.value)}
+            className="asset-input"
+            placeholder="可选，例如 https://example.com/refresh?token=..."
+          />
+        </label>
+        <p className="config-help" data-testid="proxy-refresh-help">
+          说明：你可以通过刷新按钮直接切换 IP，或者自行访问该刷新 URL 进行 IP 切换。任务启动时若该代理配置了刷新 URL，会先请求它换新 IP，再用这个代理执行。
+        </p>
+        <div className="config-field-grid">
+          <label>
+            刷新超时（秒）
+            <input
+              data-testid="proxy-refresh-timeout"
+              type="number"
+              min={1}
+              max={60}
+              value={timeoutSec}
+              onChange={(event) => setTimeoutSec(event.target.value)}
+              className="asset-input"
+            />
+          </label>
+          <label>
+            刷新后等待（毫秒）
+            <input
+              data-testid="proxy-refresh-wait"
+              type="number"
+              min={0}
+              max={30000}
+              value={waitMs}
+              onChange={(event) => setWaitMs(event.target.value)}
+              className="asset-input"
+            />
+          </label>
+        </div>
         <div className="proxy-actions">
           <Button className="proxy-action-button" onClick={() => void add()} disabled={busy}>
             <Plus className="h-4 w-4" />
             保存到代理池
           </Button>
-          <Button className="proxy-action-button" variant="outline" onClick={() => setInput("")}>
+          <Button data-testid="proxy-save-refresh-settings" className="proxy-action-button" variant="outline" onClick={() => void saveRefreshSettings()} disabled={busy}>
+            <Save className="h-4 w-4" />
+            保存刷新配置
+          </Button>
+          <Button className="proxy-action-button" variant="outline" onClick={() => { setInput(""); setRefreshURL(""); }}>
             清空输入
           </Button>
         </div>
@@ -2723,7 +2854,7 @@ function ProxyPanel({
         <DataTable
           data={proxyRows}
           empty="暂无代理，请在上方粘贴 URL 后点击「保存到代理池」"
-          minWidth={760}
+          minWidth={980}
           tableClassName="proxy-table"
           columns={[
             {
@@ -2769,6 +2900,16 @@ function ProxyPanel({
               render: (row) => <span className="text-xs">{text(row, "latency_text", "—")}</span>,
             },
             {
+              key: "stability",
+              label: "稳定率",
+              width: 140,
+              render: (row) => (
+                <span className="text-xs" data-testid={`proxy-stability-${text(row, "id")}`}>
+                  {text(row, "stability_text", "—")}
+                </span>
+              ),
+            },
+            {
               key: "protocol",
               label: "协议",
               width: 88,
@@ -2786,9 +2927,20 @@ function ProxyPanel({
               ),
             },
             {
+              key: "refresh_url",
+              label: "刷新 URL",
+              render: (row) => (
+                <ProxyRefreshURLField
+                  row={row}
+                  disabled={busy}
+                  onSave={(value) => void saveRowRefreshURL(row, value)}
+                />
+              ),
+            },
+            {
               key: "actions",
               label: "操作",
-              width: 180,
+              width: 240,
               headerClassName: "text-center",
               cellClassName: "text-center",
               render: (row) => (
@@ -2800,6 +2952,15 @@ function ProxyPanel({
                     onClick={() => void check(row)}
                   >
                     检测
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    data-testid={`proxy-row-refresh-${text(row, "id")}`}
+                    disabled={busy || !bool(row, "has_refresh_url")}
+                    onClick={() => void rotateIP(row)}
+                  >
+                    刷新
                   </Button>
                   <button
                     type="button"

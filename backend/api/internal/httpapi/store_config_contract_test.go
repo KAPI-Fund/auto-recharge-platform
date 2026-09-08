@@ -223,6 +223,25 @@ func TestNormalizeModernConfigInputAcceptsDogPayVelocityLimit(t *testing.T) {
 	}
 }
 
+func TestNormalizeModernConfigInputAcceptsProxyRefreshSettings(t *testing.T) {
+	values, err := normalizeModernConfigValues(map[string]string{
+		"proxyRefreshTimeoutSeconds": "20",
+		"proxyRefreshWaitMs":         "1500",
+	})
+	if err != nil {
+		t.Fatalf("normalizeModernConfigValues() error = %v", err)
+	}
+	if values["proxy_refresh_timeout_seconds"] != "20" || values["proxy_refresh_wait_ms"] != "1500" {
+		t.Fatalf("proxy refresh settings = %#v", values)
+	}
+	if _, err := normalizeModernConfigValues(map[string]string{"proxy_refresh_timeout_seconds": "0"}); err == nil {
+		t.Fatal("timeout 0 should be rejected")
+	}
+	if _, err := normalizeModernConfigValues(map[string]string{"proxy_refresh_wait_ms": "-1"}); err == nil {
+		t.Fatal("negative wait should be rejected")
+	}
+}
+
 func TestNormalizeModernConfigInputAcceptsKimooxMultipleBINs(t *testing.T) {
 	values, err := normalizeModernConfigValues(map[string]string{
 		"kimooxCardBINIDs": "1001, 1002\n1003",

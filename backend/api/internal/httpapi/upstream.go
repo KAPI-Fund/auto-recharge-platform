@@ -437,20 +437,15 @@ func (s *Server) queryUpstream(ctx context.Context, client *http.Client, config 
 }
 
 func (s *Server) activeUpstreamProxy() (string, error) {
-	var proxy models.ProxyAsset
-	query := s.DB.Where("active = ?", true).Order("RANDOM()").First(&proxy)
-	if query.Error == gorm.ErrRecordNotFound {
-		value := firstNonEmpty(s.configValue("proxy", ""), s.Cfg.OutboundProxy)
-		return strings.ReplaceAll(value, "{session}", strings.TrimPrefix(db.NewID("session"), "session_")), nil
+	_, proxyURL, err := s.claimActiveProxy()
+	if err == nil {
+		return proxyURL, nil
 	}
-	if query.Error != nil {
-		return "", query.Error
-	}
-	value := strings.ReplaceAll(proxy.ProxyURL, "{session}", strings.TrimPrefix(db.NewID("session"), "session_"))
-	if err := s.DB.Model(&proxy).UpdateColumn("usage_count", gorm.Expr("usage_count + 1")).Error; err != nil {
+	if !errors.Is(err, errNoActiveProxy) {
 		return "", err
 	}
-	return value, nil
+	value := firstNonEmpty(s.configValue("proxy", ""), s.Cfg.OutboundProxy)
+	return applyProxySession(value, strings.TrimPrefix(db.NewID("session"), "session_")), nil
 }
 
 func (s *Server) reserveUpstreamCard(ctx context.Context, task models.RechargeTask, workerID, leaseToken, owner string) (*upstreamCard, error) {

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"strings"
 	"time"
 
@@ -97,11 +98,13 @@ func (s *Server) internalReserveRuntimeAssets(ownerKey string) (gin.H, error) {
 		return nil, err
 	}
 	proxyValue := firstNonEmpty(s.configValue("proxy", ""), s.Cfg.OutboundProxy)
-	var proxy models.ProxyAsset
-	if s.DB.Where("active = ?", true).Order("RANDOM()").First(&proxy).Error == nil {
-		proxyValue = proxy.ProxyURL
+	if _, claimed, claimErr := s.claimActiveProxy(); claimErr == nil {
+		proxyValue = claimed
+	} else if !errors.Is(claimErr, errNoActiveProxy) {
+		return nil, claimErr
+	} else {
+		proxyValue = applyProxySession(proxyValue, strings.TrimPrefix(db.NewID("session"), "session_"))
 	}
-	proxyValue = strings.ReplaceAll(proxyValue, "{session}", strings.ReplaceAll(db.NewID("session"), "session_", ""))
 	result := gin.H{
 		"phoneAssetId": "", "cardAssetId": "",
 		"phone": gin.H{"phone": "未配置", "key": "", "usage_count": 0},

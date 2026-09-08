@@ -41,6 +41,7 @@ func normalizeModernConfigValues(input map[string]string) (map[string]string, er
 		"kimooxWebhookSecret": true, "kimooxCardBINIDs": true, "kimooxCardType": true, "kimooxPrepaidAmountMode": true, "kimooxPrepaidRechargeAmount": true,
 		"kimooxCardholderID": true, "kimooxHolderID": true, "kimooxCardGroupID": true, "kimooxBudgetID": true,
 		"kimooxWebhookToleranceSeconds": true, "kimooxApplyPollAttempts": true, "kimooxApplyPollIntervalSeconds": true,
+		"proxyRefreshTimeoutSeconds": true, "proxyRefreshWaitMs": true,
 	}
 	for _, key := range []string{
 		"max_concurrent_activations", "max_background_concurrent", "maintenance_mode", "maintenance_mode_drain",
@@ -68,6 +69,7 @@ func normalizeModernConfigValues(input map[string]string) (map[string]string, er
 		"kimoox_apply_poll_attempts", "kimoox_apply_poll_interval_seconds",
 		"stripe_secret_key", "stripe_webhook_secret", "store_debug_mode", "stripe_success_url", "stripe_cancel_url", "public_base_url",
 		"mode", "upstreamBaseURL", "upstreamCreatePath", "upstreamStatusPath",
+		"proxy_refresh_timeout_seconds", "proxy_refresh_wait_ms",
 	} {
 		allowed[key] = true
 	}
@@ -109,6 +111,7 @@ func normalizeModernConfigValues(input map[string]string) (map[string]string, er
 		"kimooxCardGroupID": "kimoox_card_group_id", "kimooxBudgetID": "kimoox_budget_id",
 		"kimooxWebhookToleranceSeconds": "kimoox_webhook_tolerance_seconds", "kimooxApplyPollAttempts": "kimoox_apply_poll_attempts",
 		"kimooxApplyPollIntervalSeconds": "kimoox_apply_poll_interval_seconds",
+		"proxyRefreshTimeoutSeconds":     "proxy_refresh_timeout_seconds", "proxyRefreshWaitMs": "proxy_refresh_wait_ms",
 	}
 
 	values := make(map[string]string, len(input))
@@ -222,6 +225,18 @@ func normalizeModernConfigValue(key, value string) (string, error) {
 			return "", fmt.Errorf("kimoox_prepaid_amount_mode 仅支持 PLAN_PLUS_5、FIXED")
 		}
 		return value, nil
+	case "proxy_refresh_timeout_seconds":
+		parsed, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil || parsed < 1 || parsed > 60 {
+			return "", fmt.Errorf("proxy_refresh_timeout_seconds 必须是 1-60 的整数")
+		}
+		return strconv.Itoa(parsed), nil
+	case "proxy_refresh_wait_ms":
+		parsed, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil || parsed < 0 || parsed > 30000 {
+			return "", fmt.Errorf("proxy_refresh_wait_ms 必须是 0-30000 的整数")
+		}
+		return strconv.Itoa(parsed), nil
 	case "kimoox_prepaid_recharge_amount":
 		parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
 		if err != nil || parsed <= 0 || parsed > 100000 {

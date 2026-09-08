@@ -78,6 +78,7 @@ func registerLegacyRoutes(router *gin.Engine, s *Server) {
 	admin.PUT("/proxies/:id", s.legacyUpdateProxy)
 	admin.POST("/proxies/:id/toggle", s.legacyToggleProxy)
 	admin.POST("/proxies/:id/test", s.legacyTestProxy)
+	admin.POST("/proxies/:id/refresh", s.legacyRefreshProxy)
 	admin.POST("/proxies/test-all", s.legacyTestAllProxies)
 	admin.DELETE("/proxies/:id", s.legacyDeleteProxy)
 

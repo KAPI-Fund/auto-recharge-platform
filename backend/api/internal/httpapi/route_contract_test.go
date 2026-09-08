@@ -77,6 +77,7 @@ func TestLegacyRouteSurfaceMatchesReference(t *testing.T) {
 		"PUT /api/admin/proxies/:id",
 		"POST /api/admin/proxies/:id/toggle",
 		"POST /api/admin/proxies/:id/test",
+		"POST /api/admin/proxies/:id/refresh",
 		"POST /api/admin/proxies/test-all",
 		"DELETE /api/admin/proxies/:id",
 		"GET /api/admin/addresses",
@@ -131,7 +132,7 @@ func TestLegacyRouteSurfaceMatchesReference(t *testing.T) {
 			t.Errorf("reference route is missing: %s", route)
 		}
 	}
-	if len(expected) != 105 {
+	if len(expected) != 106 {
 		t.Fatalf("route contract test itself is incomplete: listed %d routes", len(expected))
 	}
 

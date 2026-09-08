@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { ApiClient } from "../src/api-client.js";
-import { RechargeWorker, analyzeLegacyOutput } from "../src/worker.js";
+import { RechargeWorker, analyzeLegacyOutput, proxyAttemptOutcome } from "../src/worker.js";
 
 test("browser worker skips protocol queue items before claiming", async () => {
   const worker = new RechargeWorker({
@@ -59,6 +59,21 @@ test("legacy output retries transient proxy failures before payment", () => {
   assert.equal(result.status, "retry");
   assert.equal(result.errorCode, "proxy_connection_failed");
   assert.equal(result.shouldRetry, true);
+});
+
+test("legacy output retries region switch failures by rotating proxy", () => {
+  const result = analyzeLegacyOutput("❌ [运行时错误]: 无法将定价页切换到目标地区 PH（菲律宾），请检查后台支付地区设置。当前页面: What’s on your mind today? Think", 1);
+  assert.equal(result.status, "retry");
+  assert.equal(result.errorCode, "region_switch_failed");
+  assert.equal(result.shouldRetry, true);
+  assert.equal(proxyAttemptOutcome(result, "failed"), "failure");
+});
+
+test("proxy attempt outcome counts success and ignores unrelated failures", () => {
+  assert.equal(proxyAttemptOutcome({ status: "success" }, "succeeded"), "success");
+  assert.equal(proxyAttemptOutcome({ errorCode: "session_invalid" }, "failed"), "");
+  assert.equal(proxyAttemptOutcome({ errorCode: "card_declined" }, "manual"), "");
+  assert.equal(proxyAttemptOutcome({ errorCode: "proxy_connection_failed" }, "failed"), "failure");
 });
 
 test("dry-run worker completes with monotonic progress and trace propagation", async () => {

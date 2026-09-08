@@ -347,6 +347,8 @@ func normalizeLegacyConfigInput(input map[string]any) map[string]any {
 		"stripeSuccessURL":                     "stripe_success_url",
 		"stripeCancelURL":                      "stripe_cancel_url",
 		"publicBaseURL":                        "public_base_url",
+		"proxyRefreshTimeoutSeconds":           "proxy_refresh_timeout_seconds",
+		"proxyRefreshWaitMs":                   "proxy_refresh_wait_ms",
 		"emailEnabled":                         "email_enabled",
 		"emailNotifyPurchase":                  "email_notify_purchase",
 		"emailNotifyRedeem":                    "email_notify_redeem",

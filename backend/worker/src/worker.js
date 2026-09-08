@@ -77,6 +77,27 @@ function syncLegacyArtifacts(artifacts, runtimeDir) {
   return copied;
 }
 
+const PROXY_FAILURE_CODES = new Set([
+  "region_switch_failed",
+  "proxy_connection_failed",
+  "blocked",
+  "worker_retryable",
+  "openai_auth_error",
+  "proxy_auth_failed",
+  "proxy_auth_unsupported",
+]);
+
+export function proxyAttemptOutcome(analysis, status) {
+  if (status === "succeeded" || analysis?.status === "success") {
+    return "success";
+  }
+  const code = String(analysis?.errorCode || "").trim();
+  if (PROXY_FAILURE_CODES.has(code)) {
+    return "failure";
+  }
+  return "";
+}
+
 export function analyzeLegacyOutput(output, exitCode, timedOut = false) {
   const text = String(output || "");
   const reachedPayment = /Checkout 页面已打开|正在使用 Stripe 信用卡|\[Stripe\] Step|定价页|chatgpt\.com\/checkout/i.test(text);
@@ -91,7 +112,7 @@ export function analyzeLegacyOutput(output, exitCode, timedOut = false) {
   if (/Session 未生效|Session 无效|Session 登录失败|Session 响应异常|缺少 AccessToken|Google 登录|Sign in with Google/i.test(text)) {
     return { status: "failed", message: runtimeError || "Session 无效或已过期，请重新获取完整 Session JSON", shouldRetry: false, errorCode: "session_invalid" };
   }
-  if (/无法将定价页切换到目标地区/.test(text)) return { status: "failed", message: runtimeError || "定价页地区切换失败，请检查账单地区", shouldRetry: false, errorCode: "region_switch_failed" };
+  if (/无法将定价页切换到目标地区/.test(text)) return { status: "retry", message: "定价页地区与目标不符，准备切换代理并刷新 IP 后重试", shouldRetry: true, errorCode: "region_switch_failed" };
   if (/未找到.*升级按钮/.test(text)) return { status: "failed", message: runtimeError || "定价页未找到对应套餐升级按钮", shouldRetry: false, errorCode: "upgrade_button_missing" };
   if (/等待 Checkout 页面超时|支付结果等待超时|Checkout.*超时/.test(text)) return { status: reachedPayment ? "manual" : "failed", message: runtimeError || "Checkout 流程超时", shouldRetry: false, errorCode: "checkout_timeout" };
   if (/无法获取支付链接|API 创建 Checkout 失败|createCheckoutSession 失败|无法打开 Checkout 页面|订单创建失败/.test(text)) return { status: "failed", message: runtimeError || "无法创建官方 Checkout 订单", shouldRetry: false, errorCode: "checkout_create_failed" };
@@ -450,11 +471,16 @@ export class RechargeWorker {
         const maxAttempts = Math.max(1, Number(this.config.legacyMaxAttempts || 3));
         let combinedOutput = "";
         let finalResult = null;
+        const usedProxyIds = [];
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
           await updateOwnedTask({ status: "running", progress: Math.min(8, 4 + attempt), message: `正在进行第 ${attempt}/${maxAttempts} 次尝试`, attempt });
           lease.assert();
-          const proxy = await this.api.store("getActiveProxy").catch(() => ({ proxy: "" }));
-          const resultSecret = { ...secret, proxy: proxy.proxy || "" };
+          const proxy = await this.api.store("getActiveProxy", { excludeIds: usedProxyIds }).catch(() => ({ proxy: "" }));
+          const proxyId = String(proxy.id || proxy.proxyId || "").trim();
+          if (proxyId && !usedProxyIds.includes(proxyId)) {
+            usedProxyIds.push(proxyId);
+          }
+          const resultSecret = { ...secret, proxy: proxy.proxy || proxy.proxy_url || "" };
           const attemptResult = await runLegacy({
             taskId,
             jobKey: secret.jobKey || taskId,
@@ -483,6 +509,10 @@ export class RechargeWorker {
           });
           combinedOutput += `${combinedOutput ? "\n\n" : ""}===== ATTEMPT ${attempt}${attemptResult.cardLast4 ? ` | CARD ${attemptResult.cardLast4}` : ""} =====\n${attemptResult.output || ""}`;
           finalResult = { ...attemptResult, attempt, output: combinedOutput };
+          const proxyOutcome = proxyAttemptOutcome(attemptResult.analysis, attemptResult.status);
+          if (proxyId && proxyOutcome) {
+            await this.api.store("recordProxyAttempt", { id: proxyId, outcome: proxyOutcome }).catch(() => undefined);
+          }
           if (attemptResult.status === "succeeded" || !attemptResult.analysis?.shouldRetry || attempt >= maxAttempts) break;
           await updateOwnedTask({ status: "running", progress: Math.min(90, 20 + attempt * 8), message: attemptResult.analysis.message, attempt, rawOutput: combinedOutput });
         }

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -145,7 +146,22 @@ func TestProxyAndAddressResponsesOwnOperationalPresentation(t *testing.T) {
 	if proxy["check_label"] != "未检测" || proxy["check_tone"] != "neutral" || proxy["ip_text"] != "—" || proxy["latency_text"] != "—" {
 		t.Fatalf("untested proxy view = %#v", proxy)
 	}
+	if proxy["has_refresh_url"] != false || proxy["refresh_url"] != "" {
+		t.Fatalf("unconfigured refresh view = %#v", proxy)
+	}
+	proxy = proxyResponse(models.ProxyAsset{ID: "proxy_refresh", ProxyURL: "http://user:secret@gw.example:1000", RefreshURL: "https://token:abc@ip.example.com/refresh"})
+	if proxy["has_refresh_url"] != true || proxy["refresh_url"] != "https://token:abc@ip.example.com/refresh" {
+		t.Fatalf("refresh url view = %#v", proxy)
+	}
+	masked, _ := proxy["refresh_url_masked"].(string)
+	if masked == "" || strings.Contains(masked, "abc") {
+		t.Fatalf("refresh url should mask secrets, got %q", masked)
+	}
 	ok := true
+	proxy = proxyResponse(models.ProxyAsset{ID: "proxy_stable", SuccessCount: 4, FailureCount: 1})
+	if proxy["stability_text"] != "80%（失败 1/5）" || proxy["stability_rate"] != 80 || proxy["failure_count"] != 1 {
+		t.Fatalf("stability view = %#v", proxy)
+	}
 	proxy = proxyResponse(models.ProxyAsset{ID: "proxy_2", LastCheckOK: &ok, LastCheckIP: "203.0.113.5", LastCheckLatency: 42})
 	if proxy["check_label"] != "活跃" || proxy["check_tone"] != "success" || proxy["ip_text"] != "203.0.113.5" || proxy["latency_text"] != "42ms" {
 		t.Fatalf("active proxy view = %#v", proxy)

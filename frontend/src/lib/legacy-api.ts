@@ -460,6 +460,12 @@ export function testProxy(id: string) {
     { method: "POST" },
   );
 }
+export function refreshProxy(id: string) {
+  return legacyRequest<JsonMap>(
+    `/admin/proxies/${encodeURIComponent(id)}/refresh`,
+    { method: "POST" },
+  );
+}
 export function toggleProxy(id: string) {
   return legacyRequest<JsonMap>(
     `/admin/proxies/${encodeURIComponent(id)}/toggle`,

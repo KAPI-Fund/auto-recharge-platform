@@ -143,22 +143,10 @@ func (s *Server) internalStore(c *gin.Context) {
 	case "verifyCdkDetails":
 		payload, err = s.internalVerifyCDK(stringValue(input, "code"))
 	case "getActiveProxy":
-		var proxy models.ProxyAsset
-		query := s.DB.Where("active = ?", true).Order("RANDOM()").First(&proxy)
-		if query.Error == nil {
-			proxyValue := strings.ReplaceAll(proxy.ProxyURL, "{session}", strings.ReplaceAll(db.NewID("session"), "session_", ""))
-			if err := s.DB.Model(&proxy).UpdateColumn("usage_count", gorm.Expr("usage_count + 1")).Error; err != nil {
-				err = fmt.Errorf("更新代理使用次数失败: %w", err)
-				break
-			}
-			payload = gin.H{"proxy": proxyValue, "proxy_url": proxyValue, "id": proxy.ID}
-		} else if query.Error != gorm.ErrRecordNotFound {
-			err = query.Error
-		} else {
-			proxyValue := firstNonEmpty(s.configValue("proxy", ""), s.Cfg.OutboundProxy)
-			proxyValue = strings.ReplaceAll(proxyValue, "{session}", strings.ReplaceAll(db.NewID("session"), "session_", ""))
-			payload = gin.H{"proxy": proxyValue, "proxy_url": proxyValue}
-		}
+		payload, err = s.claimActiveProxyPayload(input)
+	case "recordProxyAttempt":
+		err = s.recordProxyAttempt(firstNonEmpty(stringValue(input, "id"), stringValue(input, "proxyId")), firstNonEmpty(stringValue(input, "outcome"), stringValue(input, "result")))
+		payload = gin.H{"ok": err == nil}
 	case "hasAvailableCard":
 		err = reclaimStaleCardLocks(s.DB)
 		var count int64

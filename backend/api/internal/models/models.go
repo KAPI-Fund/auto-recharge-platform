@@ -504,6 +504,7 @@ type ProxyAsset struct {
 	ID               string     `gorm:"primaryKey;size:64" json:"id"`
 	ProxyURL         string     `gorm:"type:text;not null" json:"proxyUrl"`
 	ProxyURLHash     string     `gorm:"uniqueIndex;size:64;not null" json:"proxyUrlHash"`
+	RefreshURL       string     `gorm:"type:text" json:"refreshUrl"`
 	Label            string     `gorm:"size:128" json:"label"`
 	Protocol         string     `gorm:"size:16" json:"protocol"`
 	Host             string     `gorm:"size:255" json:"host"`
@@ -513,7 +514,12 @@ type ProxyAsset struct {
 	LastCheckIP      string     `gorm:"size:64" json:"lastCheckIp"`
 	LastCheckLatency int        `json:"lastCheckLatencyMs"`
 	LastCheckError   string     `gorm:"size:512" json:"lastCheckError"`
+	LastRefreshAt    *time.Time `json:"lastRefreshAt"`
+	LastRefreshOK    *bool      `json:"lastRefreshOk"`
+	LastRefreshError string     `gorm:"size:512" json:"lastRefreshError"`
 	UsageCount       int        `gorm:"not null;default:0" json:"usageCount"`
+	SuccessCount     int        `gorm:"not null;default:0" json:"successCount"`
+	FailureCount     int        `gorm:"not null;default:0" json:"failureCount"`
 	SortOrder        int        `gorm:"not null;default:0" json:"sortOrder"`
 	CreatedAt        time.Time  `json:"createdAt"`
 	UpdatedAt        time.Time  `json:"updatedAt"`
