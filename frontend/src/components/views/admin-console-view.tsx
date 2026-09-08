@@ -3633,6 +3633,7 @@ function CardsPanel({
     if (!(await confirm("确定从卡池删除此银行卡吗？", "删除银行卡"))) return;
     await executeDelete(row, false);
   };
+  const activityCard = child(activity ?? undefined, "card");
   return (
     <div className="cards-page">
       <div className="stat-grid cards-stat-grid">
@@ -3775,7 +3776,7 @@ function CardsPanel({
                 <div id="card-activity-title" className="admin-confirm-title">卡片交易与事件</div>
                 <p className="card-activity-subtitle">
                   {text(activityRow, "provider", "LOCAL_TEXT")} · {text(activityRow, "card_number", "•••• " + text(activityRow, "last4"))}
-                  {text(child(activity, "card"), "providerCardId", "") ? ` · ${text(child(activity, "card"), "providerCardId")}` : ""}
+                  {text(activityCard, "providerCardId", "") ? ` · ${text(activityCard, "providerCardId")}` : ""}
                 </p>
               </div>
               <Button variant="outline" onClick={closeActivity}>关闭</Button>
