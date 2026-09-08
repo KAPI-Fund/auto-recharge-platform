@@ -71,6 +71,7 @@ func NewRouter(server *Server) *gin.Engine {
 	admin.POST("/products/generate-stop", server.stopProducts)
 	admin.GET("/product-generations/:jobKey", server.getProductGeneration)
 	admin.GET("/cards", server.adminCards)
+	admin.GET("/cards/:id/activity", server.adminCardActivity)
 	admin.POST("/cards/create", server.adminCreateProviderCard)
 	admin.POST("/cards/import", server.importCards)
 	admin.GET("/card-pools", server.adminCardPools)

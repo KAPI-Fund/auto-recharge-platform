@@ -3533,6 +3533,74 @@
             max-width: 560px;
         }
 
+        .card-activity-dialog {
+            max-width: 860px;
+            max-height: 85vh;
+            overflow: auto;
+        }
+
+        .card-activity-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .card-activity-header .admin-confirm-title {
+            margin-bottom: 4px;
+        }
+
+        .card-activity-subtitle {
+            margin: 0;
+            font-size: 13px;
+            color: var(--text-secondary);
+            word-break: break-all;
+        }
+
+        .card-activity-section-title {
+            margin: 16px 0 8px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-main);
+        }
+
+        .card-row-actions {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-detail {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--surface);
+            color: var(--text-secondary);
+            border: 1px solid var(--glass-border);
+            cursor: pointer;
+        }
+
+        .btn-detail:hover {
+            color: var(--text-main);
+            border-color: #67e8f9;
+        }
+
+        .cards-table .table-row-clickable {
+            cursor: pointer;
+        }
+
+        .cards-table .table-row-clickable:hover {
+            background: rgba(103, 232, 249, 0.08);
+        }
+
+        .card-activity-table {
+            min-width: 0 !important;
+        }
+
         .admin-confirm-title {
             font-size: 15px;
             font-weight: 600;

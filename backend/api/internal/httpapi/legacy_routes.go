@@ -107,6 +107,7 @@ func registerLegacyRoutes(router *gin.Engine, s *Server) {
 	secondary.POST("/cdks/:cdk/ship", s.legacyShipCDK)
 	secondary.DELETE("/cdks/:cdk", s.legacyDeleteCDK)
 	secondary.GET("/cards", s.legacyCards)
+	secondary.GET("/cards/:id/activity", s.adminCardActivity)
 	secondary.POST("/cards/create", s.adminCreateProviderCard)
 	secondary.POST("/cards/import", s.legacyImportCards)
 	secondary.DELETE("/cards/:id", s.legacyDeleteCard)

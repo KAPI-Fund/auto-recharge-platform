@@ -308,6 +308,13 @@ export function deleteCDK(code: string) {
 export function getCards() {
   return legacyRequest<JsonMap>("/admin/cards", {}, true);
 }
+export function getCardActivity(id: string) {
+  return legacyRequest<JsonMap>(
+    `/admin/cards/${encodeURIComponent(id)}/activity`,
+    {},
+    true,
+  );
+}
 export function getCardPools() {
   return legacyRequest<JsonMap>("/admin/card-pools", {}, true);
 }

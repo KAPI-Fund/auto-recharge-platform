@@ -103,6 +103,7 @@ import {
   getBillingSummary,
   getBrowserPool,
   getCards,
+  getCardActivity,
   getCardPools,
   getCDKs,
   getCheckoutPlans,
@@ -812,6 +813,7 @@ function DataTable({
   minWidth = 760,
   tableClassName = "",
   tableContainerClassName = "",
+  onRowClick,
 }: {
   columns: Array<{
     key: string;
@@ -826,6 +828,7 @@ function DataTable({
   minWidth?: number;
   tableClassName?: string;
   tableContainerClassName?: string;
+  onRowClick?: (row: Row) => void;
 }) {
   return (
     <div className={cn("table-container", tableContainerClassName)}>
@@ -851,7 +854,11 @@ function DataTable({
         </thead>
         <tbody className={tableClassName === "task-table" ? "" : "divide-y divide-slate-100"}>
           {data.length ? data.map((row, index) => (
-            <tr key={text(row, "id", text(row, "job_key", String(index)))}>
+            <tr
+              key={text(row, "id", text(row, "job_key", String(index)))}
+              className={onRowClick ? "table-row-clickable" : undefined}
+              onClick={onRowClick ? () => onRowClick(row) : undefined}
+            >
               {columns.map((column) => (
                 <td
                   key={column.key}
@@ -3486,6 +3493,9 @@ function CardsPanel({
   const [creating, setCreating] = useState(false);
   const [virtualDeleteRow, setVirtualDeleteRow] = useState<Row | null>(null);
   const [deletingCard, setDeletingCard] = useState(false);
+  const [activityRow, setActivityRow] = useState<Row | null>(null);
+  const [activity, setActivity] = useState<Row | null>(null);
+  const [activityBusy, setActivityBusy] = useState(false);
   const [createForm, setCreateForm] = useState({
     poolId: "",
     provider: "",
@@ -3596,6 +3606,25 @@ function CardsPanel({
       setDeletingCard(false);
     }
   };
+  const openActivity = async (row: Row) => {
+    const id = text(row, "id", "");
+    if (!id || id === "-") return;
+    setActivityRow(row);
+    setActivityBusy(true);
+    setActivity(null);
+    try {
+      setActivity(asRow(await getCardActivity(id)));
+    } catch (reason) {
+      setError(errorMessage(reason));
+      setActivityRow(null);
+    } finally {
+      setActivityBusy(false);
+    }
+  };
+  const closeActivity = () => {
+    setActivityRow(null);
+    setActivity(null);
+  };
   const remove = async (row: Row) => {
     if (isVirtualProviderCard(row)) {
       setVirtualDeleteRow(row);
@@ -3636,6 +3665,7 @@ function CardsPanel({
           empty="暂无卡片，请使用批量导入添加"
           minWidth={1860}
           tableClassName="cards-table"
+          onRowClick={(row) => void openActivity(row)}
           columns={[
             { key: "provider", label: "Provider", render: (row) => text(row, "provider", "LOCAL_TEXT") },
             { key: "pool_id", label: "卡池", render: (row) => text(row, "pool_id", "pool_legacy") },
@@ -3670,14 +3700,19 @@ function CardsPanel({
               key: "actions",
               label: "操作",
               render: (row) => (
-                <button
-                  type="button"
-                  title="删除"
-                  onClick={() => void remove(row)}
-                  className="btn-delete"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                <div className="card-row-actions" onClick={(event) => event.stopPropagation()}>
+                  <button type="button" title="交易与事件" onClick={() => void openActivity(row)} className="btn-detail">
+                    <Activity className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    title="删除"
+                    onClick={() => void remove(row)}
+                    className="btn-delete"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
               ),
             },
           ]}
@@ -3719,6 +3754,66 @@ function CardsPanel({
                 同时调用 API 销卡（收费）
               </Button>
             </div>
+          </div>
+        </div>
+      ) : null}
+      {activityRow ? (
+        <div
+          className="admin-confirm-overlay is-open"
+          role="presentation"
+          onClick={closeActivity}
+        >
+          <div
+            className="admin-confirm-dialog card-activity-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="card-activity-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="card-activity-header">
+              <div>
+                <div id="card-activity-title" className="admin-confirm-title">卡片交易与事件</div>
+                <p className="card-activity-subtitle">
+                  {text(activityRow, "provider", "LOCAL_TEXT")} · {text(activityRow, "card_number", "•••• " + text(activityRow, "last4"))}
+                  {text(child(activity, "card"), "providerCardId", "") ? ` · ${text(child(activity, "card"), "providerCardId")}` : ""}
+                </p>
+              </div>
+              <Button variant="outline" onClick={closeActivity}>关闭</Button>
+            </div>
+            {activityBusy ? <p className="config-help">正在读取回调记录…</p> : null}
+            {!activityBusy && activity ? (
+              <>
+                {bool(child(activity, "card"), "local") ? (
+                  <p className="config-help">本地导入卡不会收到发卡方 Webhook。虚拟卡在配置回调并发生开卡或支付后，记录会出现在这里。</p>
+                ) : null}
+                <h4 className="card-activity-section-title">交易</h4>
+                <DataTable
+                  data={rows(rowValue(activity, "transactions"))}
+                  empty={bool(child(activity, "card"), "local") ? "本地卡没有发卡方交易推送" : "暂无交易回调"}
+                  minWidth={0}
+                  tableClassName="card-activity-table"
+                  columns={[
+                    { key: "occurredAtText", label: "时间", render: (row) => text(row, "occurredAtText", "") },
+                    { key: "statusLabel", label: "状态", render: (row) => text(row, "statusLabel", text(row, "status")) },
+                    { key: "amount", label: "金额", render: (row) => `${text(row, "amount", "0")} ${text(row, "currency", "")}`.trim() },
+                    { key: "merchantName", label: "商户", render: (row) => text(row, "merchantName", "-") },
+                    { key: "failureCode", label: "失败原因", render: (row) => text(row, "failureCode", "-") },
+                  ]}
+                />
+                <h4 className="card-activity-section-title">事件</h4>
+                <DataTable
+                  data={rows(rowValue(activity, "events"))}
+                  empty={bool(child(activity, "card"), "local") ? "本地卡没有发卡方事件推送" : "暂无事件回调"}
+                  minWidth={0}
+                  tableClassName="card-activity-table"
+                  columns={[
+                    { key: "occurredAtText", label: "时间", render: (row) => text(row, "occurredAtText", text(row, "processedAtText", "")) },
+                    { key: "eventTypeLabel", label: "事件", render: (row) => text(row, "eventTypeLabel", text(row, "eventType")) },
+                    { key: "status", label: "处理", render: (row) => text(row, "status") === "ignored" ? "已忽略" : text(row, "status") === "processed" ? "已处理" : text(row, "status") },
+                  ]}
+                />
+              </>
+            ) : null}
           </div>
         </div>
       ) : null}

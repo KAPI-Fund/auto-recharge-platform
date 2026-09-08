@@ -13,6 +13,8 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+const adminCardActivityLimit = 100
+
 type cardPoolProviderInput struct {
 	Provider string `json:"provider"`
 	Enabled  *bool  `json:"enabled"`
@@ -351,6 +353,230 @@ func cardProviderAvailable(registry *cardpool.ProviderRegistry, value string) bo
 	// HTTP validation always uses the composition-root registry above, so adding
 	// a provider does not require changing business code here.
 	return knownCardProvider(value)
+}
+
+type adminCardRef struct {
+	ID             string
+	Provider       string
+	ProviderCardID string
+	PaymentCardID  string
+	Last4          string
+	Status         string
+	PoolID         string
+	UsageType      string
+	Local          bool
+}
+
+func (s *Server) adminCardActivity(c *gin.Context) {
+	id := strings.TrimSpace(c.Param("id"))
+	if id == "" {
+		fail(c, http.StatusBadRequest, "缺少卡片 ID")
+		return
+	}
+	if s.DB == nil {
+		fail(c, http.StatusServiceUnavailable, "数据库不可用")
+		return
+	}
+	card, found, err := s.lookupAdminCardRef(id)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "读取卡片失败")
+		return
+	}
+	if !found {
+		fail(c, http.StatusNotFound, "卡片不存在")
+		return
+	}
+
+	events := make([]gin.H, 0)
+	transactions := make([]gin.H, 0)
+	if card.PaymentCardID != "" || strings.TrimSpace(card.ProviderCardID) != "" {
+		var records []models.CardProviderEvent
+		if err := cardActivityScope(s.DB, card).Order("created_at DESC").Limit(adminCardActivityLimit).Find(&records).Error; err != nil {
+			fail(c, http.StatusInternalServerError, "读取卡片事件失败")
+			return
+		}
+		for _, record := range records {
+			events = append(events, gin.H{
+				"id":              record.ID,
+				"eventType":       record.EventType,
+				"eventTypeLabel":  cardEventTypeLabel(record.EventType),
+				"status":          record.Status,
+				"providerCardId":  record.ProviderCardID,
+				"occurredAt":      record.OccurredAt,
+				"occurredAtText":  legacyOptionalTimeString(record.OccurredAt),
+				"processedAt":     record.ProcessedAt,
+				"processedAtText": legacyOptionalTimeString(record.ProcessedAt),
+			})
+		}
+		var rows []models.CardTransaction
+		if err := cardActivityScope(s.DB, card).Order("created_at DESC").Limit(adminCardActivityLimit).Find(&rows).Error; err != nil {
+			fail(c, http.StatusInternalServerError, "读取卡片交易失败")
+			return
+		}
+		for _, row := range rows {
+			transactions = append(transactions, gin.H{
+				"id":                    row.ID,
+				"providerTransactionId": row.ProviderTransactionID,
+				"amount":                row.Amount,
+				"currency":              row.Currency,
+				"status":                row.Status,
+				"statusLabel":           cardTransactionStatusLabel(row.Status),
+				"type":                  row.Type,
+				"merchantName":          row.MerchantName,
+				"failureCode":           row.FailureCode,
+				"occurredAt":            row.OccurredAt,
+				"occurredAtText":        legacyOptionalTimeString(row.OccurredAt),
+			})
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"card": gin.H{
+			"id":             card.ID,
+			"provider":       card.Provider,
+			"providerCardId": card.ProviderCardID,
+			"last4":          card.Last4,
+			"status":         card.Status,
+			"poolId":         card.PoolID,
+			"usageType":      card.UsageType,
+			"local":          card.Local,
+		},
+		"events":       events,
+		"transactions": transactions,
+	})
+}
+
+func (s *Server) lookupAdminCardRef(id string) (adminCardRef, bool, error) {
+	var payment models.PaymentCard
+	err := s.DB.Where("id = ?", id).First(&payment).Error
+	if err == nil {
+		return adminCardRef{
+			ID: payment.ID, Provider: payment.Provider, ProviderCardID: payment.ProviderCardID,
+			PaymentCardID: payment.ID, Last4: payment.Last4, Status: payment.Status,
+			PoolID: payment.PoolID, UsageType: payment.UsageType,
+			Local: strings.EqualFold(payment.Provider, "LOCAL_TEXT") || strings.TrimSpace(payment.LocalCardAssetID) != "",
+		}, true, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return adminCardRef{}, false, err
+	}
+	var asset models.CardAsset
+	err = s.DB.Where("id = ?", id).First(&asset).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return adminCardRef{}, false, nil
+	}
+	if err != nil {
+		return adminCardRef{}, false, err
+	}
+	ref := adminCardRef{
+		ID: asset.ID, Provider: firstNonEmpty(asset.Provider, "LOCAL_TEXT"),
+		Last4: asset.Last4, Status: asset.Status, PoolID: asset.PoolID, Local: true,
+	}
+	var linked models.PaymentCard
+	linkErr := s.DB.Where("local_card_asset_id = ?", asset.ID).First(&linked).Error
+	if linkErr == nil {
+		ref.PaymentCardID = linked.ID
+		ref.Provider = linked.Provider
+		ref.ProviderCardID = linked.ProviderCardID
+		if strings.TrimSpace(ref.Status) == "" {
+			ref.Status = linked.Status
+		}
+		if strings.TrimSpace(ref.UsageType) == "" {
+			ref.UsageType = linked.UsageType
+		}
+	} else if !errors.Is(linkErr, gorm.ErrRecordNotFound) {
+		return adminCardRef{}, false, linkErr
+	}
+	return ref, true, nil
+}
+
+func cardActivityScope(database *gorm.DB, card adminCardRef) *gorm.DB {
+	paymentID := strings.TrimSpace(card.PaymentCardID)
+	provider := strings.TrimSpace(card.Provider)
+	providerCardID := strings.TrimSpace(card.ProviderCardID)
+	switch {
+	case paymentID != "" && provider != "" && providerCardID != "":
+		return database.Where("payment_card_id = ? OR (provider = ? AND provider_card_id = ?)", paymentID, provider, providerCardID)
+	case paymentID != "":
+		return database.Where("payment_card_id = ?", paymentID)
+	case provider != "" && providerCardID != "":
+		return database.Where("provider = ? AND provider_card_id = ?", provider, providerCardID)
+	default:
+		return database.Where("1 = 0")
+	}
+}
+
+func cardEventTypeLabel(eventType string) string {
+	switch strings.ToUpper(strings.TrimSpace(eventType)) {
+	case "CARD_ISSUE.SUCCESS":
+		return "开卡成功"
+	case "CARD_ISSUE.FAILED":
+		return "开卡失败"
+	case "CARD_OPERATION.FREEZE_SUCCESS":
+		return "冻结成功"
+	case "CARD_OPERATION.UNFREEZE_SUCCESS":
+		return "解冻成功"
+	case "CARD_OPERATION.CANCEL_SUCCESS":
+		return "销卡成功"
+	case "CARD.RISK_CANCELLED":
+		return "风控销卡"
+	case "CARD_OPERATION.RECHARGE_SUCCESS":
+		return "充值成功"
+	case "CARD_OPERATION.WITHDRAW_SUCCESS":
+		return "余额转出"
+	case "CARD_OPERATION.LIMIT_CHANGE_SUCCESS":
+		return "限额变更"
+	case "CARD_OPERATION.REMARK_UPDATE_SUCCESS":
+		return "备注更新"
+	case "CARD_TRANSACTION.PROCESSING":
+		return "交易处理中"
+	case "CARD_TRANSACTION.AUTH_SUCCESS":
+		return "授权成功"
+	case "CARD_TRANSACTION.AUTH_FAILED":
+		return "授权失败"
+	case "CARD_TRANSACTION.SETTLED":
+		return "已清算"
+	case "CARD_TRANSACTION.REFUND_SUCCESS":
+		return "退款成功"
+	case "CARD_TRANSACTION.REVERSE_SUCCESS":
+		return "撤销成功"
+	case "CARD_TRANSACTION.CORRECTION":
+		return "订单修正"
+	case "CARD_3DS.OTP_RECEIVED":
+		return "3DS 验证码"
+	case "WEBHOOK_TEST":
+		return "测试推送"
+	default:
+		if eventType = strings.TrimSpace(eventType); eventType != "" {
+			return eventType
+		}
+		return "未知事件"
+	}
+}
+
+func cardTransactionStatusLabel(status string) string {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "PROCESSING":
+		return "处理中"
+	case "AUTH_SUCCESS":
+		return "授权成功"
+	case "AUTH_FAILED":
+		return "授权失败"
+	case "SETTLED":
+		return "已清算"
+	case "REFUND_SUCCESS":
+		return "退款成功"
+	case "REVERSE_SUCCESS":
+		return "撤销成功"
+	case "CORRECTION":
+		return "订单修正"
+	default:
+		if status = strings.TrimSpace(status); status != "" {
+			return status
+		}
+		return "-"
+	}
 }
 
 func knownCardProvider(value string) bool {
