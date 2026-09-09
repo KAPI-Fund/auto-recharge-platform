@@ -2670,7 +2670,7 @@ function ProxyPanel({
   const [refreshURL, setRefreshURL] = useState("");
   const [timeoutSec, setTimeoutSec] = useState("15");
   const [waitMs, setWaitMs] = useState("0");
-  const [maxConcurrent, setMaxConcurrent] = useState("2");
+  const [maxConcurrent, setMaxConcurrent] = useState("0");
   const [minIntervalSec, setMinIntervalSec] = useState("120");
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -2691,7 +2691,7 @@ function ProxyPanel({
       setProxyMeta(summary);
       setTimeoutSec(text(summary, "refresh_timeout_seconds", "15"));
       setWaitMs(text(summary, "refresh_wait_ms", "0"));
-      setMaxConcurrent(text(summary, "max_concurrent", "2"));
+      setMaxConcurrent(text(summary, "max_concurrent", "0"));
       setMinIntervalSec(text(summary, "refresh_min_interval_seconds", "120"));
     } catch (reason) {
       setError(errorMessage(reason));
@@ -2821,7 +2821,7 @@ function ProxyPanel({
           />
         </label>
         <p className="config-help" data-testid="proxy-refresh-help">
-          说明：任务领代理时在池里随机选，并优先空闲代理，避免所有任务挤在一两路上。只有代理不够用时才会多人共用同一条；共用时若刚刷新过，或已有任务在用，就不会再刷 IP，避免把进行中的支付出口冲掉。
+          说明：任务领代理时在池里随机选，并优先空闲代理。默认不限制一条代理同时服务多少任务；共用时若刚刷新过，或已有任务在用，就不会再刷 IP。地区切不过再领到同一条时会强制刷新。出口国家和兑换地区不符会释放重领。
         </p>
         <div className="config-field-grid">
           <label>
@@ -2849,12 +2849,12 @@ function ProxyPanel({
             />
           </label>
           <label>
-            每条代理同时任务数
+            每条代理同时任务数（0 不限制）
             <input
               data-testid="proxy-max-concurrent"
               type="number"
-              min={1}
-              max={20}
+              min={0}
+              max={50}
               value={maxConcurrent}
               onChange={(event) => setMaxConcurrent(event.target.value)}
               className="asset-input"

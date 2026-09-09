@@ -372,8 +372,8 @@ func TestProxyRefreshMinIntervalDefaultIsTwoMinutes(t *testing.T) {
 }
 
 func TestProxyMaxConcurrentBounds(t *testing.T) {
-	if proxyMaxConcurrentValue("") != 2 || proxyMaxConcurrentValue("0") != 2 {
-		t.Fatalf("default max concurrent = %d", proxyMaxConcurrentValue(""))
+	if proxyMaxConcurrentValue("") != 0 || proxyMaxConcurrentValue("0") != 0 {
+		t.Fatalf("unlimited max concurrent = %d", proxyMaxConcurrentValue(""))
 	}
 	if proxyMaxConcurrentValue("1") != 1 {
 		t.Fatalf("exclusive max concurrent = %d", proxyMaxConcurrentValue("1"))
@@ -381,7 +381,7 @@ func TestProxyMaxConcurrentBounds(t *testing.T) {
 	if proxyMaxConcurrentValue("8") != 8 {
 		t.Fatalf("custom max concurrent = %d", proxyMaxConcurrentValue("8"))
 	}
-	if proxyMaxConcurrentValue("99") != 20 {
+	if proxyMaxConcurrentValue("99") != 50 {
 		t.Fatalf("capped max concurrent = %d", proxyMaxConcurrentValue("99"))
 	}
 }

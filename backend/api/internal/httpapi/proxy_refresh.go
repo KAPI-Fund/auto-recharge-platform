@@ -446,11 +446,11 @@ func proxyLockOwner(owner string) string {
 
 func proxyMaxConcurrentValue(raw string) int {
 	parsed, err := strconv.Atoi(strings.TrimSpace(raw))
-	if err != nil || parsed < 1 {
-		return 2
+	if err != nil || parsed < 0 {
+		return 0
 	}
-	if parsed > 20 {
-		return 20
+	if parsed > 50 {
+		return 50
 	}
 	return parsed
 }
@@ -544,9 +544,9 @@ func lookupIPCountryCodeDefault(ip string) (string, error) {
 
 func (s *Server) proxyMaxConcurrent() int {
 	if s == nil {
-		return 2
+		return 0
 	}
-	return proxyMaxConcurrentValue(s.configValue("proxy_max_concurrent", "2"))
+	return proxyMaxConcurrentValue(s.configValue("proxy_max_concurrent", "0"))
 }
 
 func (s *Server) proxyRefreshMinInterval() time.Duration {
@@ -577,7 +577,7 @@ func (s *Server) tryLockProxyAsset(id, owner string) (row models.ProxyAsset, fir
 		if count < 0 || !row.InUse || row.LockedAt == nil || row.LockedAt.Before(cutoff) {
 			count = 0
 		}
-		if count >= max {
+		if max > 0 && count >= max {
 			row = models.ProxyAsset{}
 			return nil
 		}
