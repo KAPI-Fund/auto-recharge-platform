@@ -507,13 +507,22 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
             }
         } else {
         console.log('[Stripe] Step 0: 等待 Checkout 支付页就绪...');
-        const captchaClear = await clearHumanVerification(page, {
+        const waitForCheckoutForm = () => clearHumanVerification(page, {
             phase: 'pre-fill-card',
             maxWaitMs: Number(process.env.CAPTCHA_CLEAR_TIMEOUT_MS || 90000),
             maxBypassRounds: 3,
             requireCheckoutReady: true,
             checkoutReadyWaitMs: Number(process.env.CHECKOUT_READY_WAIT_MS || 45000)
         });
+        let captchaClear = await waitForCheckoutForm();
+        const checkoutUrl = String(page.url() || '');
+        for (let reload = 1; reload <= 2 && captchaClear.checkoutNotReady && !captchaClear.cleared; reload += 1) {
+            console.log(`  [Stripe] 支付表单未加载，重新请求 Checkout (${reload}/2): ${checkoutUrl.slice(0, 96)}`);
+            await page.goto(checkoutUrl, { waitUntil: 'domcontentloaded', timeout: 90000 }).catch((error) => {
+                console.warn(`  [Stripe] 重新请求 Checkout 失败: ${error.message}`);
+            });
+            captchaClear = await waitForCheckoutForm();
+        }
         if (!captchaClear.cleared) {
             const screenshotPath = await saveDebugScreenshot(page, captchaClear.checkoutNotReady ? 'checkout_not_ready' : 'captcha_before_card_fill');
             if (captchaClear.checkoutNotReady) {
@@ -1224,14 +1233,12 @@ async function debugLogCountrySelect(el, via = '') {
                 name: node.getAttribute('name') || '',
                 value: String(node.value || ''),
                 selectedText: opt ? String(opt.textContent || '').trim() : '',
-                optionCount: node.options ? node.options.length : 0,
-                html: node.outerHTML || ''
+                optionCount: node.options ? node.options.length : 0
             };
         });
         console.log(`  [Stripe][debug] 国家 select via=${via} tag=${info.tag} id=${info.id} name=${info.name} value=${info.value} selected="${info.selectedText}" options=${info.optionCount}`);
-        console.log(`  [Stripe][debug] 国家 select HTML: ${info.html}`);
     } catch (error) {
-        console.log(`  [Stripe][debug] 国家 select HTML 读取失败: ${error.message}`);
+        console.log(`  [Stripe][debug] 国家 select 读取失败: ${error.message}`);
     }
 }
 
