@@ -1279,44 +1279,80 @@ async function findBillingCountrySelect(page) {
     return null;
 }
 
+async function readBillingCountryLabel(el) {
+    if (!el) return '';
+    return el.evaluate((node) => {
+        if (String(node.tagName || '').toLowerCase() === 'select') {
+            const opt = node.options?.[node.selectedIndex];
+            const text = opt ? String(opt.textContent || '').trim() : '';
+            return /^select$/i.test(text) ? '' : text;
+        }
+        return String(node.innerText || node.value || '').replace(/\s+/g, ' ').trim();
+    }).catch(() => '');
+}
+
+async function setCountrySelectForReact(el, value) {
+    await el.evaluate((select, next) => {
+        const proto = window.HTMLSelectElement.prototype;
+        const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+        if (desc && desc.set) desc.set.call(select, next);
+        else select.value = next;
+        select.dispatchEvent(new Event('input', { bubbles: true }));
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+    }, value);
+}
+
 async function clickBillingCountryOption(page, el, optionLabels) {
     const names = countryVerifyLabels(optionLabels);
     const codes = (optionLabels || []).map(String).filter((opt) => /^[A-Z]{2}$/.test(opt.trim()));
+    const code = codes[0] || '';
+    const want = names[0] || '';
     await el.scrollIntoViewIfNeeded().catch(() => { });
+
+    const fieldBox = el.locator('xpath=ancestor::div[@data-field="country"][1]').first();
     const wrap = el.locator('xpath=ancestor::div[contains(@class,"p-Select")][1]').first();
-    if ((await wrap.count()) > 0) {
+    if ((await fieldBox.count()) > 0) {
+        await fieldBox.click({ timeout: 3000 }).catch(() => { });
+    } else if ((await wrap.count()) > 0) {
         await wrap.click({ timeout: 3000 }).catch(() => el.click({ force: true, timeout: 3000 }));
     } else {
         await el.click({ force: true, timeout: 3000 });
     }
     await page.waitForTimeout(400);
+
+    let clicked = false;
     const contexts = [page, ...page.frames().filter((frame) => frame !== page.mainFrame())];
     for (const name of names) {
         for (const ctx of contexts) {
             try {
                 const option = ctx.getByRole('option', { name, exact: true }).first();
-                if (await option.isVisible({ timeout: 1500 })) {
+                if (await option.isVisible({ timeout: 1200 })) {
                     await option.click({ timeout: 2000 });
+                    clicked = true;
                     console.log(`  [Stripe] ✅ 国家点击选项: ${name}`);
-                    return true;
+                    break;
                 }
             } catch (_) { /* next */ }
         }
+        if (clicked) break;
     }
-    for (const code of codes) {
-        try {
-            await el.selectOption({ value: code }, { timeout: 2000 });
-            console.log(`  [Stripe] ✅ 国家: ${code} (value)`);
-            return true;
-        } catch (_) { /* next */ }
+    if (!clicked && want) {
+        await page.keyboard.type(want, { delay: 40 }).catch(() => { });
+        await page.waitForTimeout(250);
+        await page.keyboard.press('Enter').catch(() => { });
+        console.log(`  [Stripe] 国家键盘输入: ${want}`);
     }
-    for (const name of names) {
-        try {
-            await el.selectOption({ label: name }, { timeout: 2000 });
-            console.log(`  [Stripe] ✅ 国家: ${name}`);
-            return true;
-        } catch (_) { /* next */ }
+    if (code) {
+        await setCountrySelectForReact(el, code);
     }
+
+    await page.waitForTimeout(1000);
+    const shown = await readBillingCountryLabel(el);
+    if (visibleCountryMatches(shown, names) && !/\(\+\d/.test(shown)) {
+        console.log(`  [Stripe] ✅ 国家选择后仍是 ${shown}`);
+        return true;
+    }
+    console.log(`  [Stripe] ⚠️ 点击后账单国家仍是「${shown || '(空)'}」，需要 ${want}`);
     return false;
 }
 
@@ -1325,14 +1361,8 @@ async function pageHasCountryText(page, optionLabels) {
     if (!names.length) return false;
     const el = await findBillingCountrySelect(page);
     if (!el) return false;
-    const shown = await el.evaluate((node) => {
-        if (String(node.tagName || '').toLowerCase() === 'select') {
-            const opt = node.options?.[node.selectedIndex];
-            const text = opt ? String(opt.textContent || '').trim() : '';
-            return /^select$/i.test(text) ? '' : text;
-        }
-        return String(node.innerText || node.value || '').replace(/\s+/g, ' ').trim();
-    }).catch(() => '');
+    await page.waitForTimeout(400);
+    const shown = await readBillingCountryLabel(el);
     if (/\(\+\d/.test(shown)) return false;
     return visibleCountryMatches(shown, names);
 }
