@@ -1235,37 +1235,106 @@ async function debugLogCountrySelect(el, via = '') {
     }
 }
 
-async function pageHasCountryText(page, optionLabels) {
-    const names = countryVerifyLabels(optionLabels);
-    if (!names.length) return false;
+function isPhoneCountrySelectMeta(id, name, aria) {
+    const hay = `${id || ''} ${name || ''} ${aria || ''}`.toLowerCase();
+    return /phone|mobile|linkmobile/.test(hay);
+}
+
+async function findBillingCountrySelect(page) {
     const contexts = [page, ...page.frames().filter((frame) => frame !== page.mainFrame())];
+    const selectors = [
+        '#billingAddress-countryInput',
+        'div[data-field="country"] select',
+        'select[name="country"][autocomplete="billing country"]'
+    ];
     for (const ctx of contexts) {
-        for (const name of names) {
+        for (const sel of selectors) {
             try {
-                const loc = ctx.getByText(name, { exact: true });
-                const count = await loc.count();
-                for (let i = 0; i < count; i += 1) {
-                    if (await loc.nth(i).isVisible({ timeout: 300 }).catch(() => false)) {
-                        return true;
-                    }
-                }
+                const el = ctx.locator(sel).first();
+                if ((await el.count()) === 0) continue;
+                const meta = await el.evaluate((node) => ({
+                    id: node.id || '',
+                    name: node.getAttribute('name') || '',
+                    aria: node.getAttribute('aria-label') || ''
+                })).catch(() => null);
+                if (!meta || isPhoneCountrySelectMeta(meta.id, meta.name, meta.aria)) continue;
+                return el;
             } catch (_) { /* next */ }
         }
         try {
-            const field = ctx.getByLabel(/country or region|国家或地区/i, { exact: false }).first();
-            if ((await field.count()) === 0) continue;
-            const shown = await field.evaluate((node) => {
-                if (String(node.tagName || '').toLowerCase() === 'select') {
-                    const opt = node.options?.[node.selectedIndex];
-                    const text = opt ? String(opt.textContent || '').trim() : '';
-                    return /^select$/i.test(text) ? '' : text;
-                }
-                return String(node.innerText || node.value || '').replace(/\s+/g, ' ').trim();
-            }).catch(() => '');
-            if (visibleCountryMatches(shown, names)) return true;
+            const loc = ctx.getByLabel(/^country or region$|^国家或地区$/i);
+            const count = await loc.count();
+            for (let i = count - 1; i >= 0; i -= 1) {
+                const el = loc.nth(i);
+                const meta = await el.evaluate((node) => ({
+                    id: node.id || '',
+                    name: node.getAttribute('name') || '',
+                    aria: node.getAttribute('aria-label') || ''
+                })).catch(() => null);
+                if (!meta || isPhoneCountrySelectMeta(meta.id, meta.name, meta.aria)) continue;
+                return el;
+            }
         } catch (_) { /* next frame */ }
     }
+    return null;
+}
+
+async function clickBillingCountryOption(page, el, optionLabels) {
+    const names = countryVerifyLabels(optionLabels);
+    const codes = (optionLabels || []).map(String).filter((opt) => /^[A-Z]{2}$/.test(opt.trim()));
+    await el.scrollIntoViewIfNeeded().catch(() => { });
+    const wrap = el.locator('xpath=ancestor::div[contains(@class,"p-Select")][1]').first();
+    if ((await wrap.count()) > 0) {
+        await wrap.click({ timeout: 3000 }).catch(() => el.click({ force: true, timeout: 3000 }));
+    } else {
+        await el.click({ force: true, timeout: 3000 });
+    }
+    await page.waitForTimeout(400);
+    const contexts = [page, ...page.frames().filter((frame) => frame !== page.mainFrame())];
+    for (const name of names) {
+        for (const ctx of contexts) {
+            try {
+                const option = ctx.getByRole('option', { name, exact: true }).first();
+                if (await option.isVisible({ timeout: 1500 })) {
+                    await option.click({ timeout: 2000 });
+                    console.log(`  [Stripe] ✅ 国家点击选项: ${name}`);
+                    return true;
+                }
+            } catch (_) { /* next */ }
+        }
+    }
+    for (const code of codes) {
+        try {
+            await el.selectOption({ value: code }, { timeout: 2000 });
+            console.log(`  [Stripe] ✅ 国家: ${code} (value)`);
+            return true;
+        } catch (_) { /* next */ }
+    }
+    for (const name of names) {
+        try {
+            await el.selectOption({ label: name }, { timeout: 2000 });
+            console.log(`  [Stripe] ✅ 国家: ${name}`);
+            return true;
+        } catch (_) { /* next */ }
+    }
     return false;
+}
+
+async function pageHasCountryText(page, optionLabels) {
+    const names = countryVerifyLabels(optionLabels);
+    if (!names.length) return false;
+    const el = await findBillingCountrySelect(page);
+    if (!el) return false;
+    const shown = await el.evaluate((node) => {
+        if (String(node.tagName || '').toLowerCase() === 'select') {
+            const opt = node.options?.[node.selectedIndex];
+            const text = opt ? String(opt.textContent || '').trim() : '';
+            return /^select$/i.test(text) ? '' : text;
+        }
+        return String(node.innerText || node.value || '').replace(/\s+/g, ' ').trim();
+    }).catch(() => '');
+    if (/\(\+\d/.test(shown)) return false;
+    return visibleCountryMatches(shown, names);
 }
 
 async function selectCountryUntilPageShows(page, optionLabels, attempts = 3) {
@@ -1595,7 +1664,18 @@ async function selectBillingComboboxItem(page, item, optionLabels, logLabel) {
             tag = await resolveElementTag(item.el);
         }
         if (tag === 'select') {
-            if (logLabel === '国家') await debugLogCountrySelect(item.el, 'combobox-select');
+            if (logLabel === '国家') {
+                const meta = await item.el.evaluate((node) => ({
+                    id: node.id || '',
+                    name: node.getAttribute('name') || '',
+                    aria: node.getAttribute('aria-label') || ''
+                })).catch(() => ({ id: '', name: '', aria: '' }));
+                if (isPhoneCountrySelectMeta(meta.id, meta.name, meta.aria)) {
+                    console.log('  [Stripe] ⏭️ 跳过手机号国家下拉');
+                    return false;
+                }
+                await debugLogCountrySelect(item.el, 'combobox-select');
+            }
             for (const opt of options) {
                 try {
                     await item.el.selectOption({ label: String(opt) });
@@ -1907,6 +1987,15 @@ async function fillBillingControl(page, labelPatterns, value, logLabel) {
 
 async function selectBillingCountry(page, optionLabels) {
     console.log('  [Stripe] 选择国家...');
+    const field = await findBillingCountrySelect(page);
+    if (field) {
+        await debugLogCountrySelect(field, 'billing-country');
+        const clicked = await clickBillingCountryOption(page, field, optionLabels);
+        if (clicked) {
+            await debugLogCountrySelect(field, 'billing-country after-click');
+            return true;
+        }
+    }
     const ok = await selectFirstVisibleSelect(
         page,
         OPENAI_BILLING_FIELD_SELECTORS.country,
@@ -1915,21 +2004,18 @@ async function selectBillingCountry(page, optionLabels) {
     );
     if (ok) return true;
 
-    const patterns = [/country or region/i, /国家或地区/i, /^country$/i, /国家/];
-    let field = null;
+    const patterns = [/^country or region$/i, /^国家或地区$/i];
+    let fallback = null;
     for (const pat of patterns) {
-        field = await findBillingControl(page, pat, 'combobox');
-        if (field) break;
+        fallback = await findBillingControl(page, pat, 'combobox');
+        if (fallback) break;
     }
-    if (!field) {
-        field = await findBillingControl(page, patterns, 'textbox');
-    }
-    if (!field) {
+    if (!fallback) {
         console.log('  [Stripe] ⚠️ 国家字段未找到');
         return false;
     }
 
-    return selectBillingComboboxItem(page, { el: field }, optionLabels, '国家');
+    return selectBillingComboboxItem(page, { el: fallback }, optionLabels, '国家');
 }
 
 async function selectBillingState(page, stateFullName, stateRaw) {
