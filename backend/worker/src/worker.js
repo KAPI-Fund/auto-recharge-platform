@@ -487,39 +487,14 @@ export class RechargeWorker {
             });
             proxyId = String(proxy.id || proxy.proxyId || "").trim();
             proxyURL = String(proxy.proxy || proxy.proxy_url || "").trim();
-            const proxyLogs = Array.isArray(proxy.logs) ? proxy.logs : [];
-            if (!proxyURL && !proxyId) {
-              proxyLogs.push("代理池为空，使用本机出口直连");
-            }
-            for (const line of proxyLogs) {
+            for (const line of Array.isArray(proxy.logs) ? proxy.logs : []) {
               const text = String(line || "").trim();
-              if (!text) continue;
-              console.log(`[proxy] ${text}`);
-              await this.api.appendRuntimeLog({
-                taskId,
-                jobKey: secret.jobKey || taskId,
-                traceId: activeTraceId,
-                level: "info",
-                source: "worker/proxy",
-                text,
-                workerId,
-                leaseToken,
-              }).catch(() => undefined);
+              if (text) console.log(`[proxy] ${text}`);
             }
           } catch (error) {
             if (isTaskLeaseError(error)) throw error;
             const message = error instanceof Error ? error.message : "获取代理失败";
             console.log(`[proxy] ${message}`);
-            await this.api.appendRuntimeLog({
-              taskId,
-              jobKey: secret.jobKey || taskId,
-              traceId: activeTraceId,
-              level: "info",
-              source: "worker/proxy",
-              text: message,
-              workerId,
-              leaseToken,
-            }).catch(() => undefined);
             combinedOutput += `${combinedOutput ? "\n\n" : ""}===== ATTEMPT ${attempt} =====\n${message}`;
             finalResult = {
               status: "failed",
