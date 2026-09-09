@@ -109,7 +109,7 @@ func (s *Server) internalReserveRuntimeAssets(ctx context.Context, ownerKey stri
 		if proxyValue != "" {
 			proxyValue = applyProxySession(proxyValue, strings.TrimPrefix(db.NewID("session"), "session_"))
 		}
-	} else if claimedID, claimed, claimErr := s.claimActiveProxyFor(ctx, ownerKey); claimErr == nil {
+	} else if claimedID, claimed, _, claimErr := s.claimActiveProxyFor(ctx, ownerKey, ""); claimErr == nil {
 		proxyID = claimedID
 		proxyValue = claimed
 	} else if envProxyFallbackAllowed(claimErr) {

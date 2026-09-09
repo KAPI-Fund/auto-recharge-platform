@@ -293,6 +293,84 @@ func TestProxyNeedsRefreshUsesInterval(t *testing.T) {
 	}
 }
 
+func TestShouldRefreshClaimedProxyIsSelfConsistent(t *testing.T) {
+	ok := true
+	failed := false
+	recent := time.Now().Add(-10 * time.Second)
+	stale := time.Now().Add(-5 * time.Minute)
+	interval := 2 * time.Minute
+	url := "https://ip.example.com/refresh"
+	cases := []struct {
+		name          string
+		firstSlot     bool
+		url           string
+		lastAt        *time.Time
+		lastOK        *bool
+		interval      time.Duration
+		reusePrevious bool
+		want          bool
+	}{
+		{name: "idle never refreshed", firstSlot: true, url: url, interval: interval, want: true},
+		{name: "idle after cooldown", firstSlot: true, url: url, lastAt: &stale, lastOK: &ok, interval: interval, want: true},
+		{name: "idle but just refreshed", firstSlot: true, url: url, lastAt: &recent, lastOK: &ok, interval: interval, want: false},
+		{name: "idle last refresh failed", firstSlot: true, url: url, lastAt: &recent, lastOK: &failed, interval: interval, want: true},
+		{name: "share while another task is running even if cooldown elapsed", firstSlot: false, url: url, lastAt: &stale, lastOK: &ok, interval: interval, want: false},
+		{name: "share while another task is running inside cooldown", firstSlot: false, url: url, lastAt: &recent, lastOK: &ok, interval: interval, want: false},
+		{name: "no refresh URL", firstSlot: true, url: "", lastAt: nil, interval: interval, want: false},
+		{name: "zero interval on idle proxy", firstSlot: true, url: url, lastAt: &recent, lastOK: &ok, interval: 0, want: true},
+		{name: "zero interval still does not refresh a shared proxy", firstSlot: false, url: url, lastAt: &stale, lastOK: &ok, interval: 0, want: false},
+		{name: "region retry reuses the only proxy and must refresh", firstSlot: true, url: url, lastAt: &recent, lastOK: &ok, interval: interval, reusePrevious: true, want: true},
+		{name: "region retry still refreshes when the only proxy is shared", firstSlot: false, url: url, lastAt: &recent, lastOK: &ok, interval: interval, reusePrevious: true, want: true},
+		{name: "region retry without refresh URL cannot rotate IP", firstSlot: true, url: "", lastAt: &recent, lastOK: &ok, interval: interval, reusePrevious: true, want: false},
+	}
+	for _, tc := range cases {
+		got := shouldRefreshClaimedProxy(tc.firstSlot, tc.url, tc.lastAt, tc.lastOK, tc.interval, tc.reusePrevious)
+		if got != tc.want {
+			t.Fatalf("%s: got %v want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestProxyCountryMismatchAfterRefresh(t *testing.T) {
+	if reason := proxyCountryMismatch(false, "PH", "US"); reason != "" {
+		t.Fatalf("skip check when not refreshed, got %q", reason)
+	}
+	if reason := proxyCountryMismatch(true, "", "US"); reason != "" {
+		t.Fatalf("skip check without target region, got %q", reason)
+	}
+	if reason := proxyCountryMismatch(true, "PH", ""); reason != "" {
+		t.Fatalf("skip check when country lookup is empty, got %q", reason)
+	}
+	if reason := proxyCountryMismatch(true, "PH", "PH"); reason != "" {
+		t.Fatalf("matching country should continue, got %q", reason)
+	}
+	reason := proxyCountryMismatch(true, "PH", "US")
+	if reason == "" || !strings.Contains(reason, "US") || !strings.Contains(reason, "PH") {
+		t.Fatalf("mismatch reason = %q", reason)
+	}
+}
+
+func TestProxyClaimRegionReadsWorkerPayload(t *testing.T) {
+	if got := proxyClaimRegion(map[string]any{"region": "ph"}); got != "PH" {
+		t.Fatalf("region = %q", got)
+	}
+	if got := proxyClaimRegion(map[string]any{"payment_region": "US"}); got != "US" {
+		t.Fatalf("payment_region = %q", got)
+	}
+}
+
+func TestProxyRefreshMinIntervalDefaultIsTwoMinutes(t *testing.T) {
+	if proxyRefreshMinIntervalValue("") != 120*time.Second || proxyRefreshMinIntervalValue("-1") != 120*time.Second {
+		t.Fatalf("default interval = %s", proxyRefreshMinIntervalValue(""))
+	}
+	if proxyRefreshMinIntervalValue("30") != 30*time.Second {
+		t.Fatalf("custom interval = %s", proxyRefreshMinIntervalValue("30"))
+	}
+	if proxyRefreshMinIntervalValue("99999") != 3600*time.Second {
+		t.Fatalf("capped interval = %s", proxyRefreshMinIntervalValue("99999"))
+	}
+}
+
 func TestProxyMaxConcurrentBounds(t *testing.T) {
 	if proxyMaxConcurrentValue("") != 2 || proxyMaxConcurrentValue("0") != 2 {
 		t.Fatalf("default max concurrent = %d", proxyMaxConcurrentValue(""))

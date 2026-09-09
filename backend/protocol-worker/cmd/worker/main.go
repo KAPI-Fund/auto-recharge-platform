@@ -120,7 +120,10 @@ func process(ctx context.Context, cfg config.Config, api *store.Client, message 
 	result := flow.Result{Status: "failed"}
 	for attempt := 1; attempt <= cfg.MaxAttempts; attempt++ {
 		_ = api.Update(taskID, map[string]any{"status": "running", "progress": 6, "message": fmt.Sprintf("协议支付第 %d/%d 次", attempt, cfg.MaxAttempts), "workerId": workerID, "leaseToken": lease, "attempt": attempt})
-		proxy, err := api.Action("getActiveProxy", nil)
+		if store.Str(secret, "region") == "" {
+			secret["region"] = cfg.PaymentRegion
+		}
+		proxy, err := api.Action("getActiveProxy", map[string]any{"region": store.Str(secret, "region")})
 		if err != nil {
 			result = flow.Result{Status: "retry", Message: err.Error(), ErrorCode: "proxy_unavailable"}
 			if attempt == cfg.MaxAttempts {
@@ -135,9 +138,6 @@ func process(ctx context.Context, cfg config.Config, api *store.Client, message 
 			proxyID = ""
 		}
 		secret["proxy"] = proxyURL
-		if store.Str(secret, "region") == "" {
-			secret["region"] = cfg.PaymentRegion
-		}
 		result = flow.Run(flow.Options{
 			Config: cfg,
 			Store:  api,

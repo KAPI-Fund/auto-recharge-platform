@@ -2,9 +2,11 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"math/rand"
 	"net"
@@ -477,6 +479,69 @@ func proxyNeedsRefresh(lastAt *time.Time, lastOK *bool, minInterval time.Duratio
 	return time.Since(*lastAt) >= minInterval
 }
 
+func shouldRefreshClaimedProxy(firstSlot bool, refreshURL string, lastAt *time.Time, lastOK *bool, minInterval time.Duration, reusePrevious bool) bool {
+	if strings.TrimSpace(refreshURL) == "" {
+		return false
+	}
+	if reusePrevious {
+		return true
+	}
+	if !firstSlot {
+		return false
+	}
+	return proxyNeedsRefresh(lastAt, lastOK, minInterval)
+}
+
+func proxyClaimRegion(input map[string]any) string {
+	return strings.ToUpper(firstNonEmpty(stringValue(input, "region"), stringValue(input, "paymentRegion"), stringValue(input, "payment_region")))
+}
+
+func proxyCountryMismatch(didRefresh bool, region, country string) string {
+	if !didRefresh {
+		return ""
+	}
+	region = strings.ToUpper(strings.TrimSpace(region))
+	country = strings.ToUpper(strings.TrimSpace(country))
+	if region == "" || country == "" {
+		return ""
+	}
+	if country == region {
+		return ""
+	}
+	return fmt.Sprintf("代理出口国家 %s 与目标地区 %s 不符", country, region)
+}
+
+var lookupIPCountryCode = lookupIPCountryCodeDefault
+
+func lookupIPCountryCodeDefault(ip string) (string, error) {
+	ip = strings.TrimSpace(ip)
+	if ip == "" {
+		return "", nil
+	}
+	request, err := http.NewRequest(http.MethodGet, "http://ip-api.com/json/"+url.PathEscape(ip)+"?fields=status,countryCode", nil)
+	if err != nil {
+		return "", err
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(response.Body, 1024))
+	var parsed struct {
+		Status      string `json:"status"`
+		CountryCode string `json:"countryCode"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", err
+	}
+	if !strings.EqualFold(parsed.Status, "success") {
+		return "", nil
+	}
+	return strings.ToUpper(strings.TrimSpace(parsed.CountryCode)), nil
+}
+
 func (s *Server) proxyMaxConcurrent() int {
 	if s == nil {
 		return 2
@@ -578,27 +643,51 @@ func (s *Server) proxyRefreshSettings() (timeout time.Duration, wait time.Durati
 }
 
 func (s *Server) claimActiveProxy(excludeIDs ...string) (string, string, error) {
-	return s.claimActiveProxyFor(context.Background(), "worker", excludeIDs...)
+	id, proxyURL, _, err := s.claimActiveProxyFor(context.Background(), "worker", "", excludeIDs...)
+	return id, proxyURL, err
 }
 
-func (s *Server) claimActiveProxyFor(ctx context.Context, owner string, excludeIDs ...string) (string, string, error) {
+func (s *Server) claimActiveProxyFor(ctx context.Context, owner, region string, excludeIDs ...string) (string, string, []string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	timeout, wait, _, _ := s.proxyRefreshSettings()
 	minInterval := s.proxyRefreshMinInterval()
+	region = strings.ToUpper(strings.TrimSpace(region))
 	ctx, cancel := context.WithTimeout(ctx, proxyClaimDeadline(timeout, wait))
 	defer cancel()
 
+	var notes []string
+	note := func(format string, args ...any) {
+		msg := strings.TrimSpace(fmt.Sprintf(format, args...))
+		if msg == "" {
+			return
+		}
+		notes = append(notes, msg)
+		log.Printf("[proxy] %s", msg)
+	}
+
 	var rows []models.ProxyAsset
 	if err := s.DB.WithContext(ctx).Where("active = ?", true).Find(&rows).Error; err != nil {
-		return "", "", err
+		return "", "", notes, err
 	}
 	if len(rows) == 0 {
-		return "", "", errNoActiveProxy
+		note("代理池为空，将使用本机出口或系统配置代理")
+		return "", "", notes, errNoActiveProxy
 	}
 	rand.Shuffle(len(rows), func(i, j int) { rows[i], rows[j] = rows[j], rows[i] })
 	rows = orderProxiesForClaim(rows, excludeIDs)
+	excluded := map[string]bool{}
+	for _, id := range excludeIDs {
+		if id = strings.TrimSpace(id); id != "" {
+			excluded[id] = true
+		}
+	}
+	if region != "" {
+		note("开始领取代理，目标地区 %s，候选 %d 条", region, len(rows))
+	} else {
+		note("开始领取代理，候选 %d 条", len(rows))
+	}
 	client := newProxyRefreshClient(timeout, s.allowPrivateRefreshURLs())
 	sessionID := strings.TrimPrefix(db.NewID("session"), "session_")
 	owner = proxyLockOwner(owner)
@@ -608,30 +697,38 @@ func (s *Server) claimActiveProxyFor(ctx context.Context, owner string, excludeI
 	skippedBusy := false
 	for _, candidate := range rows {
 		if err := ctx.Err(); err != nil {
+			note("领取超时，停止继续尝试")
 			if lastErr != nil {
-				return "", "", fmt.Errorf("代理领取超时: %w", lastErr)
+				return "", "", notes, fmt.Errorf("代理领取超时: %w", lastErr)
 			}
-			return "", "", fmt.Errorf("代理领取超时: %w", err)
+			return "", "", notes, fmt.Errorf("代理领取超时: %w", err)
 		}
 		row, firstSlot, lockErr := s.tryLockProxyAsset(candidate.ID, owner)
 		if lockErr != nil {
-			return "", "", lockErr
+			return "", "", notes, lockErr
 		}
 		if row.ID == "" {
 			skippedBusy = true
+			note("代理 %s 已达同时任务上限，跳过", candidate.ID)
 			continue
 		}
 		if err := ctx.Err(); err != nil {
 			_ = s.unlockProxyAsset(row.ID)
-			return "", "", fmt.Errorf("代理领取超时: %w", err)
+			note("领取超时，已释放代理 %s", row.ID)
+			return "", "", notes, fmt.Errorf("代理领取超时: %w", err)
 		}
 		refreshURL := strings.TrimSpace(row.RefreshURL)
-		// 别人正在用这条出口时绝不刷新，否则会把进行中的支付 IP 冲掉。
-		// 间隔内也不刷新，避免任务刚结束、下一个马上又刷一次。
-		if firstSlot && refreshURL != "" && proxyNeedsRefresh(row.LastRefreshAt, row.LastRefreshOK, minInterval) {
+		didRefresh := shouldRefreshClaimedProxy(firstSlot, refreshURL, row.LastRefreshAt, row.LastRefreshOK, minInterval, excluded[row.ID])
+		if didRefresh {
 			triedRefresh = true
+			if excluded[row.ID] {
+				note("地区失败后再次领到代理 %s，强制刷新 IP", row.ID)
+			} else {
+				note("代理 %s 空闲，开始刷新 IP", row.ID)
+			}
 			if err := s.doProxyRefresh(ctx, client, refreshURL); err != nil {
 				lastErr = err
+				note("代理 %s 刷新 IP 失败: %s，释放并换下一条", row.ID, err.Error())
 				_ = s.saveProxyRefreshResult(row.ID, false, err.Error())
 				_ = s.unlockProxyAsset(row.ID)
 				continue
@@ -642,36 +739,67 @@ func (s *Server) claimActiveProxyFor(ctx context.Context, owner string, excludeI
 				case <-ctx.Done():
 					timer.Stop()
 					_ = s.unlockProxyAsset(row.ID)
+					note("刷新后等待超时，已释放代理 %s", row.ID)
 					if lastErr != nil {
-						return "", "", fmt.Errorf("代理领取超时: %w", lastErr)
+						return "", "", notes, fmt.Errorf("代理领取超时: %w", lastErr)
 					}
-					return "", "", fmt.Errorf("代理领取超时: %w", ctx.Err())
+					return "", "", notes, fmt.Errorf("代理领取超时: %w", ctx.Err())
 				case <-timer.C:
 				}
 				timer.Stop()
 			}
 			if err := s.saveProxyRefreshResult(row.ID, true, ""); err != nil {
 				_ = s.unlockProxyAsset(row.ID)
-				return "", "", err
+				return "", "", notes, err
 			}
+			note("代理 %s 刷新 IP 成功", row.ID)
+		} else if refreshURL == "" {
+			note("代理 %s 未配置刷新 URL，直接使用", row.ID)
+		} else if !firstSlot {
+			note("代理 %s 已有任务在用，跳过刷新，复用当前 IP", row.ID)
+		} else {
+			note("代理 %s 在 %d 秒刷新间隔内，跳过刷新，复用当前 IP", row.ID, int(minInterval/time.Second))
+		}
+		proxyURL := applyProxySession(row.ProxyURL, sessionID)
+		if didRefresh && region != "" {
+			probe := proxyProbe(proxyURL)
+			if !probe.OK {
+				lastErr = fmt.Errorf("刷新后探测失败: %s", firstNonEmpty(probe.Error, "未知错误"))
+				note("代理 %s 刷新后探测失败: %s，释放并换下一条", row.ID, firstNonEmpty(probe.Error, "未知错误"))
+				_ = s.unlockProxyAsset(row.ID)
+				continue
+			}
+			country, _ := lookupIPCountryCode(probe.IP)
+			if reason := proxyCountryMismatch(true, region, country); reason != "" {
+				lastErr = errors.New(reason)
+				note("代理 %s 刷新后出口 %s（IP %s），目标 %s，不匹配，释放并重新领取", row.ID, firstNonEmpty(country, "未知"), firstNonEmpty(probe.IP, "-"), region)
+				_ = s.unlockProxyAsset(row.ID)
+				continue
+			}
+			note("代理 %s 刷新后出口 %s（IP %s），与目标地区 %s 一致，继续", row.ID, firstNonEmpty(country, "未知"), firstNonEmpty(probe.IP, "-"), region)
 		}
 		if err := s.DB.Model(&models.ProxyAsset{}).Where("id = ?", row.ID).UpdateColumn("usage_count", gorm.Expr("usage_count + 1")).Error; err != nil {
 			_ = s.unlockProxyAsset(row.ID)
-			return "", "", err
+			return "", "", notes, err
 		}
-		id, proxyURL, err := s.finishProxyClaim(ctx, row.ID, applyProxySession(row.ProxyURL, sessionID))
+		id, proxyURL, err := s.finishProxyClaim(ctx, row.ID, proxyURL)
 		if err != nil {
-			return "", "", err
+			note("领取完成前请求已取消，已释放代理 %s", row.ID)
+			return "", "", notes, err
 		}
-		return id, proxyURL, nil
+		note("已领取代理 %s", id)
+		return id, proxyURL, notes, nil
 	}
 	if triedRefresh && lastErr != nil {
-		return "", "", fmt.Errorf("代理刷新 IP 失败: %w", lastErr)
+		note("所有可刷新代理均失败: %s", lastErr.Error())
+		return "", "", notes, fmt.Errorf("代理刷新 IP 失败: %w", lastErr)
 	}
 	if skippedBusy {
-		return "", "", errProxyBusy
+		note("所有代理都在使用中")
+		return "", "", notes, errProxyBusy
 	}
-	return "", "", errNoActiveProxy
+	note("没有可用代理")
+	return "", "", notes, errNoActiveProxy
 }
 
 func (s *Server) finishProxyClaim(ctx context.Context, id, proxyURL string) (string, string, error) {
@@ -691,20 +819,40 @@ func (s *Server) claimActiveProxyPayload(ctx context.Context, input map[string]a
 		ctx = context.Background()
 	}
 	owner := firstNonEmpty(stringValue(input, "ownerKey"), stringValue(input, "taskId"), "worker")
-	id, proxyURL, err := s.claimActiveProxyFor(ctx, owner, proxyExcludeIDs(input)...)
+	taskID := firstNonEmpty(stringValue(input, "taskId"), stringValue(input, "task_id"))
+	id, proxyURL, notes, err := s.claimActiveProxyFor(ctx, owner, proxyClaimRegion(input), proxyExcludeIDs(input)...)
+	if envProxyFallbackAllowed(err) {
+		proxyValue := strings.TrimSpace(firstNonEmpty(s.configValue("proxy", ""), s.Cfg.OutboundProxy))
+		if proxyValue != "" {
+			proxyValue = applyProxySession(proxyValue, strings.TrimPrefix(db.NewID("session"), "session_"))
+			notes = append(notes, "代理池为空，使用系统配置代理")
+		} else {
+			notes = append(notes, "代理池为空，使用本机出口直连")
+		}
+		s.writeProxyClaimLogs(taskID, notes)
+		return gin.H{"proxy": proxyValue, "proxy_url": proxyValue, "logs": notes, "message": strings.Join(notes, "\n")}, nil
+	}
 	if err != nil {
-		if envProxyFallbackAllowed(err) {
-			proxyValue := strings.TrimSpace(firstNonEmpty(s.configValue("proxy", ""), s.Cfg.OutboundProxy))
-			if proxyValue != "" {
-				proxyValue = applyProxySession(proxyValue, strings.TrimPrefix(db.NewID("session"), "session_"))
-			}
-			return gin.H{"proxy": proxyValue, "proxy_url": proxyValue}, nil
+		s.writeProxyClaimLogs(taskID, notes)
+		if len(notes) > 0 {
+			return nil, fmt.Errorf("%s；%w", strings.Join(notes, "；"), err)
 		}
 		return nil, err
 	}
 	id, proxyURL, err = s.finishProxyClaim(ctx, id, proxyURL)
 	if err != nil {
+		s.writeProxyClaimLogs(taskID, notes)
 		return nil, err
 	}
-	return gin.H{"proxy": proxyURL, "proxy_url": proxyURL, "id": id}, nil
+	s.writeProxyClaimLogs(taskID, notes)
+	return gin.H{"proxy": proxyURL, "proxy_url": proxyURL, "id": id, "logs": notes, "message": strings.Join(notes, "\n")}, nil
+}
+
+func (s *Server) writeProxyClaimLogs(taskID string, notes []string) {
+	taskID = strings.TrimSpace(taskID)
+	for _, line := range notes {
+		if taskID != "" {
+			_ = s.appendTaskRuntimeLog(taskID, "", "info", "proxy", line)
+		}
+	}
 }

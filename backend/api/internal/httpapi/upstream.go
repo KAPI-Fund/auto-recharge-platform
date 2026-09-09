@@ -443,7 +443,7 @@ func (s *Server) queryUpstream(ctx context.Context, client *http.Client, config 
 }
 
 func (s *Server) activeUpstreamProxy(ctx context.Context) (string, string, error) {
-	id, proxyURL, err := s.claimActiveProxyFor(ctx, "upstream")
+	id, proxyURL, _, err := s.claimActiveProxyFor(ctx, "upstream", "")
 	if err == nil {
 		return id, proxyURL, nil
 	}

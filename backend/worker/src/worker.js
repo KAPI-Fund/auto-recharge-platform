@@ -479,12 +479,47 @@ export class RechargeWorker {
           let proxyId = "";
           let proxyURL = "";
           try {
-            const proxy = await this.api.store("getActiveProxy", { excludeIds: usedProxyIds, ownerKey: `${workerId || "worker"}:${taskId || ""}:${attempt}` });
+            const proxy = await this.api.store("getActiveProxy", {
+              excludeIds: usedProxyIds,
+              ownerKey: `${workerId || "worker"}:${taskId || ""}:${attempt}`,
+              region: secret.region || secret.paymentRegion || "",
+              taskId,
+            });
             proxyId = String(proxy.id || proxy.proxyId || "").trim();
             proxyURL = String(proxy.proxy || proxy.proxy_url || "").trim();
+            const proxyLogs = Array.isArray(proxy.logs) ? proxy.logs : [];
+            if (!proxyURL && !proxyId) {
+              proxyLogs.push("代理池为空，使用本机出口直连");
+            }
+            for (const line of proxyLogs) {
+              const text = String(line || "").trim();
+              if (!text) continue;
+              console.log(`[proxy] ${text}`);
+              await this.api.appendRuntimeLog({
+                taskId,
+                jobKey: secret.jobKey || taskId,
+                traceId: activeTraceId,
+                level: "info",
+                source: "worker/proxy",
+                text,
+                workerId,
+                leaseToken,
+              }).catch(() => undefined);
+            }
           } catch (error) {
             if (isTaskLeaseError(error)) throw error;
             const message = error instanceof Error ? error.message : "获取代理失败";
+            console.log(`[proxy] ${message}`);
+            await this.api.appendRuntimeLog({
+              taskId,
+              jobKey: secret.jobKey || taskId,
+              traceId: activeTraceId,
+              level: "info",
+              source: "worker/proxy",
+              text: message,
+              workerId,
+              leaseToken,
+            }).catch(() => undefined);
             combinedOutput += `${combinedOutput ? "\n\n" : ""}===== ATTEMPT ${attempt} =====\n${message}`;
             finalResult = {
               status: "failed",
@@ -556,6 +591,17 @@ export class RechargeWorker {
             await updateOwnedTask({ status: "running", progress: Math.min(90, 20 + attempt * 8), message: attemptResult.analysis.message, attempt, rawOutput: combinedOutput });
           } finally {
             if (proxyId) {
+              console.log(`[proxy] 释放代理 ${proxyId}`);
+              await this.api.appendRuntimeLog({
+                taskId,
+                jobKey: secret.jobKey || taskId,
+                traceId: activeTraceId,
+                level: "info",
+                source: "worker/proxy",
+                text: `释放代理 ${proxyId}`,
+                workerId,
+                leaseToken,
+              }).catch(() => undefined);
               await this.api.store("releaseProxy", { id: proxyId }).catch(() => this.api.store("releaseProxy", { id: proxyId }).catch(() => undefined));
             }
           }
