@@ -1213,64 +1213,78 @@ function visibleCountryMatches(text, labels) {
     });
 }
 
-async function readNativeCountrySelect(page) {
-    const el = page.locator('#billingAddress-countryInput, div[data-field="country"] select, select[name="country"][autocomplete="billing country"]').first();
-    if ((await el.count()) === 0) return { value: '', label: '' };
-    return el.evaluate((node) => {
-        const opt = node.options?.[node.selectedIndex];
-        const label = opt ? String(opt.textContent || '').trim() : '';
-        return {
-            value: String(node.value || '').trim(),
-            label: /^select$/i.test(label) ? '' : label
-        };
-    }).catch(() => ({ value: '', label: '' }));
+async function debugLogCountrySelect(el, via = '') {
+    if (!el) return;
+    try {
+        const info = await el.evaluate((node) => {
+            const opt = node.options?.[node.selectedIndex];
+            return {
+                tag: String(node.tagName || ''),
+                id: node.id || '',
+                name: node.getAttribute('name') || '',
+                value: String(node.value || ''),
+                selectedText: opt ? String(opt.textContent || '').trim() : '',
+                optionCount: node.options ? node.options.length : 0,
+                html: node.outerHTML || ''
+            };
+        });
+        console.log(`  [Stripe][debug] 国家 select via=${via} tag=${info.tag} id=${info.id} name=${info.name} value=${info.value} selected="${info.selectedText}" options=${info.optionCount}`);
+        console.log(`  [Stripe][debug] 国家 select HTML: ${info.html}`);
+    } catch (error) {
+        console.log(`  [Stripe][debug] 国家 select HTML 读取失败: ${error.message}`);
+    }
 }
 
-async function readVisibleCountryOrRegion(page) {
-    const native = await readNativeCountrySelect(page);
-    if (native.label) return native.label;
-    const locators = [
-        page.getByRole('combobox', { name: /country or region|国家或地区|^country$|^国家$/i }),
-        page.getByLabel(/country or region|国家或地区|^country$|^国家$/i)
-    ];
-    for (const loc of locators) {
+async function pageHasCountryText(page, optionLabels) {
+    const names = countryVerifyLabels(optionLabels);
+    if (!names.length) return false;
+    const contexts = [page, ...page.frames().filter((frame) => frame !== page.mainFrame())];
+    for (const ctx of contexts) {
+        for (const name of names) {
+            try {
+                const loc = ctx.getByText(name, { exact: true });
+                const count = await loc.count();
+                for (let i = 0; i < count; i += 1) {
+                    if (await loc.nth(i).isVisible({ timeout: 300 }).catch(() => false)) {
+                        return true;
+                    }
+                }
+            } catch (_) { /* next */ }
+        }
         try {
-            const el = loc.first();
-            if (!(await el.isVisible({ timeout: 350 }).catch(() => false))) continue;
-            const tag = await resolveElementTag(el);
-            if (tag === 'select') {
-                const label = await el.evaluate((node) => {
+            const field = ctx.getByLabel(/country or region|国家或地区/i, { exact: false }).first();
+            if ((await field.count()) === 0) continue;
+            const shown = await field.evaluate((node) => {
+                if (String(node.tagName || '').toLowerCase() === 'select') {
                     const opt = node.options?.[node.selectedIndex];
                     const text = opt ? String(opt.textContent || '').trim() : '';
                     return /^select$/i.test(text) ? '' : text;
-                }).catch(() => '');
-                if (label) return label;
-                continue;
-            }
-            const inner = String(await el.innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
-            const inputVal = String(await el.inputValue({ timeout: 250 }).catch(() => '')).trim();
-            const text = inner || inputVal;
-            if (text) return text;
-        } catch (_) { /* next */ }
+                }
+                return String(node.innerText || node.value || '').replace(/\s+/g, ' ').trim();
+            }).catch(() => '');
+            if (visibleCountryMatches(shown, names)) return true;
+        } catch (_) { /* next frame */ }
     }
-    return '';
+    return false;
 }
 
-async function notifyStripeSelectChange(el) {
-    await el.evaluate((node) => {
-        node.dispatchEvent(new Event('input', { bubbles: true }));
-        node.dispatchEvent(new Event('change', { bubbles: true }));
-    }).catch(() => { });
-}
-
-async function confirmCountrySelection(page, logLabel, optionLabels) {
-    if (logLabel !== '国家') return true;
-    const labels = countryVerifyLabels(optionLabels);
-    await page.waitForTimeout(400);
-    const shown = await readVisibleCountryOrRegion(page);
-    if (visibleCountryMatches(shown, labels)) return true;
-    const native = await readNativeCountrySelect(page);
-    console.log(`  [Stripe] ⚠️ Country or region 仍是「${shown || native.label || '(空)'}」，需要 ${labels[0] || ''}（select value=${native.value || ''}）`);
+async function selectCountryUntilPageShows(page, optionLabels, attempts = 3) {
+    const names = countryVerifyLabels(optionLabels);
+    const want = names[0] || '';
+    if (await pageHasCountryText(page, optionLabels)) {
+        console.log(`  [Stripe] ✅ 页面已显示国家: ${want}`);
+        return true;
+    }
+    for (let i = 1; i <= attempts; i += 1) {
+        console.log(`  [Stripe] 选择国家（第 ${i}/${attempts} 次）...`);
+        await selectBillingCountry(page, optionLabels);
+        await page.waitForTimeout(600);
+        if (await pageHasCountryText(page, optionLabels)) {
+            console.log(`  [Stripe] ✅ 页面已选中 ${want}`);
+            return true;
+        }
+        console.log(`  [Stripe] ⚠️ 页面未见「${want}」，准备重试`);
+    }
     return false;
 }
 
@@ -1317,21 +1331,20 @@ async function selectFirstVisibleSelect(page, selectors, optionLabels, logLabel,
                     if (ok) return true;
                     continue;
                 }
-                // Stripe p-Select 是原生 <select id="billingAddress-countryInput">
+                // 原生 <select> 常被视觉隐藏（自定义下拉覆盖），不要求 visible，直接 selectOption
+                if (logLabel === '国家') await debugLogCountrySelect(el, sel);
                 for (const opt of options) {
                     try {
-                        await el.selectOption({ label: opt }, { timeout: 2000, force: true });
-                        if (logLabel === '国家') await notifyStripeSelectChange(el);
-                        if (!(await confirmCountrySelection(page, logLabel, options))) continue;
+                        await el.selectOption({ label: opt }, { timeout: 2000 });
                         console.log(`  [Stripe] ✅ ${logLabel}: ${opt}`);
+                        if (logLabel === '国家') await debugLogCountrySelect(el, `${sel} after-label`);
                         await page.waitForTimeout(600);
                         return true;
                     } catch (_) { /* next */ }
                     try {
-                        await el.selectOption({ value: opt }, { timeout: 2000, force: true });
-                        if (logLabel === '国家') await notifyStripeSelectChange(el);
-                        if (!(await confirmCountrySelection(page, logLabel, options))) continue;
+                        await el.selectOption({ value: opt }, { timeout: 2000 });
                         console.log(`  [Stripe] ✅ ${logLabel}: ${opt} (value)`);
+                        if (logLabel === '国家') await debugLogCountrySelect(el, `${sel} after-value`);
                         await page.waitForTimeout(600);
                         return true;
                     } catch (_) { /* next */ }
@@ -1344,8 +1357,6 @@ async function selectFirstVisibleSelect(page, selectors, optionLabels, logLabel,
 }
 
 async function getCurrentBillingCountryValue(page) {
-    const visible = await readVisibleCountryOrRegion(page);
-    if (visible) return { value: '', label: visible };
     for (const sel of OPENAI_BILLING_FIELD_SELECTORS.country) {
         try {
             const el = page.locator(sel).first();
@@ -1584,21 +1595,19 @@ async function selectBillingComboboxItem(page, item, optionLabels, logLabel) {
             tag = await resolveElementTag(item.el);
         }
         if (tag === 'select') {
-            const selectTimeout = logLabel === '国家' ? { timeout: 2000, force: true } : undefined;
+            if (logLabel === '国家') await debugLogCountrySelect(item.el, 'combobox-select');
             for (const opt of options) {
                 try {
-                    await item.el.selectOption({ label: String(opt) }, selectTimeout);
-                    if (logLabel === '国家') await notifyStripeSelectChange(item.el);
-                    if (!(await confirmCountrySelection(page, logLabel, options))) continue;
+                    await item.el.selectOption({ label: String(opt) });
                     console.log(`  [Stripe] ✅ ${logLabel}: ${opt}`);
+                    if (logLabel === '国家') await debugLogCountrySelect(item.el, 'combobox-select after-label');
                     await page.waitForTimeout(600);
                     return true;
                 } catch (_) { /* next */ }
                 try {
-                    await item.el.selectOption({ value: String(opt) }, selectTimeout);
-                    if (logLabel === '国家') await notifyStripeSelectChange(item.el);
-                    if (!(await confirmCountrySelection(page, logLabel, options))) continue;
+                    await item.el.selectOption({ value: String(opt) });
                     console.log(`  [Stripe] ✅ ${logLabel}: ${opt} (value)`);
+                    if (logLabel === '国家') await debugLogCountrySelect(item.el, 'combobox-select after-value');
                     await page.waitForTimeout(600);
                     return true;
                 } catch (_) { /* next */ }
@@ -1610,7 +1619,6 @@ async function selectBillingComboboxItem(page, item, optionLabels, logLabel) {
             await item.el.fill(String(options[0] || ''));
             await page.keyboard.press('ArrowDown').catch(() => { });
             await page.keyboard.press('Enter').catch(() => { });
-            if (!(await confirmCountrySelection(page, logLabel, options))) return false;
             console.log(`  [Stripe] ✅ ${logLabel}: ${options[0]} (typeahead)`);
             return true;
         }
@@ -1622,14 +1630,12 @@ async function selectBillingComboboxItem(page, item, optionLabels, logLabel) {
                 const option = page.getByRole('option', { name: opt }).first();
                 if (await option.isVisible({ timeout: 1200 })) {
                     await option.click({ timeout: 2000 });
-                    if (!(await confirmCountrySelection(page, logLabel, options))) continue;
                     console.log(`  [Stripe] ✅ ${logLabel}: ${opt}`);
                     return true;
                 }
             } catch (_) { /* next */ }
             try {
                 await page.getByText(opt, { exact: true }).click({ timeout: 1200 });
-                if (!(await confirmCountrySelection(page, logLabel, options))) continue;
                 console.log(`  [Stripe] ✅ ${logLabel}: ${opt}`);
                 return true;
             } catch (_) { /* next */ }
@@ -1642,31 +1648,13 @@ async function selectBillingComboboxItem(page, item, optionLabels, logLabel) {
 
 async function fillOpenAiBillingDirect(page, address, fullName, baselineAmount = null) {
     const stateFullName = normalizeStateFullName(address.state);
-    const countryCode = String(address.country || '').trim().toUpperCase();
     const filled = { name: false, country: false, line1: false, city: false, postal: false, state: false };
 
     const directWait = 2500;
     console.log('  [Stripe] 税区优先：国家 → 州 → 邮编 → 街道/城市 → 姓名');
 
     const countryOpts = countryOptionsForAddress(address);
-    const countryLabels = countryVerifyLabels(countryOpts);
-    await page.locator('#billingAddress-countryInput').waitFor({ state: 'attached', timeout: 15000 }).catch(() => { });
-    const currentCountry = await getCurrentBillingCountryValue(page);
-    if (visibleCountryMatches(currentCountry.label, countryLabels)) {
-        filled.country = true;
-        console.log(`  [Stripe] ✅ 国家已是 ${countryLabels[0] || countryCode}`);
-    } else {
-        if (currentCountry.label) {
-            console.log(`  [Stripe] 当前 Country or region: ${currentCountry.label}，需选中 ${countryLabels[0] || countryCode}`);
-        }
-        filled.country = await selectFirstVisibleSelect(
-            page,
-            OPENAI_BILLING_FIELD_SELECTORS.country,
-            countryOpts,
-            '国家',
-            directWait
-        );
-    }
+    filled.country = await selectCountryUntilPageShows(page, countryOpts);
 
     if (filled.country) {
         await page.waitForTimeout(1500);
@@ -1758,11 +1746,14 @@ async function fillOpenAiBillingBySectionMeta(page, address, fullName) {
     const afterName = nameIndex >= 0 ? items.slice(nameIndex + 1) : items;
     const countryItem = await pickBillingItem(afterName, [/country/, /region/, /国家/, /地区/])
         || afterName.find((item) => item.meta.tag === 'select' || item.meta.role === 'combobox');
-    if (visibleCountryMatches(await readVisibleCountryOrRegion(page), countryVerifyLabels(countryOptions))) {
+    if (await pageHasCountryText(page, countryOptions)) {
         filled.country = true;
         console.log(`  [Stripe] ✅ 国家已是 ${countryVerifyLabels(countryOptions)[0] || address.country}`);
     } else if (countryItem) {
         filled.country = await selectBillingComboboxItem(page, countryItem, countryOptions, '国家');
+        if (filled.country && !(await pageHasCountryText(page, countryOptions))) {
+            filled.country = false;
+        }
         if (filled.country) {
             await page.waitForTimeout(1200);
             items = await getBillingInputsBelowHeading(page);
@@ -1916,7 +1907,6 @@ async function fillBillingControl(page, labelPatterns, value, logLabel) {
 
 async function selectBillingCountry(page, optionLabels) {
     console.log('  [Stripe] 选择国家...');
-    await page.locator('#billingAddress-countryInput').waitFor({ state: 'attached', timeout: 12000 }).catch(() => { });
     const ok = await selectFirstVisibleSelect(
         page,
         OPENAI_BILLING_FIELD_SELECTORS.country,
@@ -2125,7 +2115,7 @@ async function fillOpenAiCheckoutBilling(page, address, fullName) {
             filled.name = await fillBillingFullNameStrict(page, fullName);
         }
         if (!status.country) {
-            filled.country = await selectBillingCountry(page, countryOptionsForAddress(address));
+            filled.country = await selectCountryUntilPageShows(page, countryOptionsForAddress(address));
             if (filled.country) await page.waitForTimeout(800);
         }
         if (!status.line1) {
