@@ -44,10 +44,47 @@ const REGION_CURRENT_COUNTRY_HINTS = {
 const SKIP_REGION_BUTTON_TEXT = /^(Upgrade|Personal|Business|Free|Plus|Pro|Subscribe|Close|Your current plan|升级|订阅|关闭)$/i;
 
 const PLAN_UPGRADE_PATTERNS = {
-    plus: [/升级至\s*Plus/i, /Upgrade to Plus/i, /Get Plus/i, /Subscribe to Plus/i, /^Upgrade$/i],
-    pro_5x: [/升级至\s*Pro/i, /Upgrade to Pro/i, /Get Pro/i, /^Upgrade$/i],
-    pro_20x: [/升级至\s*Pro/i, /Upgrade to Pro/i, /Get Pro/i, /^Upgrade$/i]
+    plus: [
+        /Rejoin Plus/i,
+        /重新加入\s*Plus/i,
+        /再次订阅\s*Plus/i,
+        /升级至\s*Plus/i,
+        /Upgrade to Plus/i,
+        /Get Plus/i,
+        /Subscribe to Plus/i
+    ],
+    go: [/Upgrade to Go/i, /Get Go/i, /升级至\s*Go/i],
+    pro_5x: [/升级至\s*Pro/i, /Upgrade to Pro/i, /Get Pro/i],
+    pro_20x: [/升级至\s*Pro/i, /Upgrade to Pro/i, /Get Pro/i]
 };
+
+const PLAN_CARD_HEADING = {
+    plus: /^(ChatGPT Plus|Plus)$/i,
+    go: /^(ChatGPT Go|Go)$/i,
+    pro_5x: /^(ChatGPT Pro|Pro)$/i,
+    pro_20x: /^(ChatGPT Pro|Pro)$/i
+};
+
+const CHECKOUT_PLAN_HEADING = {
+    plus: /Plus plan|ChatGPT Plus/i,
+    go: /Go plan|ChatGPT Go/i,
+    pro_5x: /Pro plan|ChatGPT Pro/i,
+    pro_20x: /Pro plan|ChatGPT Pro/i
+};
+
+function isWrongPlanButton(plan, label) {
+    const text = normalizeOptionText(label);
+    if (!text) {
+        return false;
+    }
+    if (plan === 'plus') {
+        return /\bgo\b/i.test(text) && !/plus/i.test(text);
+    }
+    if (plan === 'go') {
+        return /plus|pro/i.test(text) && !/\bgo\b/i.test(text);
+    }
+    return /\bgo\b/i.test(text) && !/pro/i.test(text);
+}
 
 function normalizeOptionText(text) {
     return String(text || '').replace(/\s+/g, ' ').trim();
@@ -89,7 +126,7 @@ async function isPersonalPlanView(page) {
     }
 
     const plusTitle = await page.getByText(/^ChatGPT Plus$/i).first().isVisible({ timeout: 800 }).catch(() => false);
-    const plusBtn = await page.getByRole('button', { name: /Upgrade to Plus|升级至\s*Plus|Get Plus|Subscribe to Plus/i })
+    const plusBtn = await page.getByRole('button', { name: /Rejoin Plus|Upgrade to Plus|升级至\s*Plus|Get Plus|Subscribe to Plus/i })
         .first()
         .isVisible({ timeout: 800 })
         .catch(() => false);
@@ -554,6 +591,62 @@ async function pageShowsCurrency(page, regionCode) {
     return pageShowsTargetRegionPricing(page, regionCode);
 }
 
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function refreshAssignedProxyIp(options = {}) {
+    const waitMs = Number(options.waitMs);
+    const settleMs = Number.isFinite(waitMs) ? Math.max(0, waitMs) : 4000;
+    const refreshUrl = String(process.env.PROXY_REFRESH_URL || '').trim();
+    const proxyId = String(process.env.PROXY_ASSET_ID || '').trim();
+    const apiBase = String(process.env.API_BASE_URL || '').replace(/\/$/, '');
+    const token = String(process.env.WORKER_API_TOKEN || '').trim();
+
+    try {
+        if (refreshUrl) {
+            console.log('[步骤] 正在刷新代理 IP...');
+            const response = await fetch(refreshUrl, {
+                headers: { 'User-Agent': 'auto-recharge-platform/proxy-refresh' },
+                signal: AbortSignal.timeout(20000)
+            });
+            const body = await response.text().catch(() => '');
+            if (!response.ok) {
+                console.warn(`[Warn] 代理刷新失败: HTTP ${response.status} ${String(body).slice(0, 120)}`);
+                return false;
+            }
+            console.log(`[步骤] 代理刷新成功: ${String(body).replace(/\s+/g, ' ').slice(0, 120)}`);
+        } else if (proxyId && apiBase && token) {
+            console.log('[步骤] 正在通过 API 刷新代理 IP...');
+            const response = await fetch(`${apiBase}/api/v1/internal/store/refreshProxy`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Worker-Token': token
+                },
+                body: JSON.stringify({ id: proxyId }),
+                signal: AbortSignal.timeout(30000)
+            });
+            const body = await response.text().catch(() => '');
+            if (!response.ok) {
+                console.warn(`[Warn] 代理刷新 API 失败: HTTP ${response.status} ${String(body).slice(0, 120)}`);
+                return false;
+            }
+            console.log(`[步骤] 代理刷新成功: ${String(body).replace(/\s+/g, ' ').slice(0, 120)}`);
+        } else {
+            console.warn('[Warn] 无法刷新代理：缺少 PROXY_ASSET_ID 或刷新 URL');
+            return false;
+        }
+        if (settleMs > 0) {
+            await sleep(settleMs);
+        }
+        return true;
+    } catch (error) {
+        console.warn(`[Warn] 刷新代理 IP 异常: ${error.message}`);
+        return false;
+    }
+}
+
 async function waitForPricingPage(page, timeout = 60000) {
     await page.goto(PRICING_URL, { waitUntil: 'domcontentloaded', timeout });
     await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
@@ -667,6 +760,53 @@ async function selectProUsageTierOnPricingPage(page, planType) {
     return true;
 }
 
+async function clickNamedPlanButton(page, plan, patterns) {
+    for (const pattern of patterns) {
+        try {
+            const btn = page.getByRole('button', { name: pattern }).first();
+            if (!(await btn.isVisible({ timeout: 1500 }).catch(() => false))) {
+                continue;
+            }
+            const label = normalizeOptionText(await btn.innerText().catch(() => ''));
+            if (isWrongPlanButton(plan, label)) {
+                continue;
+            }
+            await btn.scrollIntoViewIfNeeded().catch(() => {});
+            await btn.click({ timeout: 10000 });
+            console.log(`✅ [步骤] 已点击升级按钮: ${label || pattern}`);
+            return true;
+        } catch (_) { /* try next */ }
+    }
+    return false;
+}
+
+async function clickUpgradeInPlanCard(page, plan) {
+    const headingName = PLAN_CARD_HEADING[plan] || PLAN_CARD_HEADING.plus;
+    const heading = page.getByRole('heading', { name: headingName }).first();
+    if (!(await heading.isVisible({ timeout: 2500 }).catch(() => false))) {
+        return false;
+    }
+
+    const card = heading.locator('xpath=ancestor::*[self::section or self::article or self::div][.//button][1]');
+    const btn = card.getByRole('button').filter({
+        hasText: /Upgrade|升级|Subscribe|Get|Rejoin|重新加入|再次订阅/i
+    }).first();
+    if (!(await btn.isVisible({ timeout: 2000 }).catch(() => false))) {
+        return false;
+    }
+
+    const label = normalizeOptionText(await btn.innerText().catch(() => ''));
+    if (isWrongPlanButton(plan, label)) {
+        console.warn(`[Warn] ${plan} 卡片按钮是「${label}」，跳过以免点到其他套餐`);
+        return false;
+    }
+
+    await btn.scrollIntoViewIfNeeded().catch(() => {});
+    await btn.click({ timeout: 10000 });
+    console.log(`✅ [步骤] 已点击 ${plan} 卡片按钮: ${label}`);
+    return true;
+}
+
 /**
  * 点击对应套餐的升级按钮
  */
@@ -680,68 +820,11 @@ async function clickPlanUpgrade(page, planType) {
     await page.waitForTimeout(1000);
     await selectProUsageTierOnPricingPage(page, plan);
 
-    for (const pattern of patterns) {
-        try {
-            const btn = page.getByRole('button', { name: pattern }).first();
-            if (await btn.isVisible({ timeout: 4000 })) {
-                await btn.scrollIntoViewIfNeeded().catch(() => {});
-                await btn.click({ timeout: 10000 });
-                console.log(`✅ [步骤] 已点击升级按钮: ${pattern}`);
-                return;
-            }
-        } catch (_) { /* try next */ }
+    if (await clickNamedPlanButton(page, plan, patterns)) {
+        return;
     }
-
-    const cardTitle = plan === 'plus' ? /ChatGPT Plus/i : /ChatGPT Pro/i;
-    try {
-        const card = page.locator('div').filter({ hasText: cardTitle }).filter({ has: page.getByRole('button') }).first();
-        const btn = card.getByRole('button').filter({ hasText: /升级|Upgrade|Subscribe|Get/i }).first();
-        if (await btn.isVisible({ timeout: 3000 })) {
-            await btn.scrollIntoViewIfNeeded().catch(() => {});
-            await btn.click({ timeout: 10000 });
-            console.log('✅ [步骤] 已点击套餐卡片内的升级按钮');
-            return;
-        }
-    } catch (_) { /* fall through */ }
-
-    if (plan === 'plus') {
-        try {
-            const plusCard = page.locator('div').filter({ has: page.getByText(/ChatGPT Plus|^Plus$/i) }).filter({
-                has: page.getByRole('button', { name: /^Upgrade$|^升级$/i })
-            }).first();
-            const upgradeBtn = plusCard.getByRole('button', { name: /^Upgrade$|^升级$/i }).first();
-            if (await upgradeBtn.isVisible({ timeout: 3000 })) {
-                await upgradeBtn.scrollIntoViewIfNeeded().catch(() => {});
-                await upgradeBtn.click({ timeout: 10000 });
-                console.log('✅ [步骤] 已点击 Plus 卡片 Upgrade 按钮');
-                return;
-            }
-        } catch (_) { /* fall through */ }
-    }
-
-    const fallbackSelectors = plan === 'plus'
-        ? [
-            'button:has-text("升级至 Plus")',
-            'button:has-text("Upgrade to Plus")',
-            '[role="dialog"] >> text=ChatGPT Plus >> .. >> .. >> button:has-text("Upgrade")',
-            'text=ChatGPT Plus >> xpath=ancestor::div[.//button[contains(., "Upgrade") or contains(., "升级")]][1] >> button'
-        ]
-        : [
-            'button:has-text("升级至 Pro")',
-            'button:has-text("Upgrade to Pro")',
-            'text=ChatGPT Pro >> xpath=ancestor::div[.//button[contains(., "Upgrade") or contains(., "升级")]][1] >> button'
-        ];
-
-    for (const sel of fallbackSelectors) {
-        try {
-            const btn = page.locator(sel).first();
-            if (await btn.isVisible({ timeout: 3000 })) {
-                await btn.scrollIntoViewIfNeeded().catch(() => {});
-                await btn.click({ timeout: 10000 });
-                console.log(`✅ [步骤] 已点击升级按钮 (${sel})`);
-                return;
-            }
-        } catch (_) { /* try next */ }
+    if (await clickUpgradeInPlanCard(page, plan)) {
+        return;
     }
 
     const onLogin = await page.locator('text=Sign in with Google').isVisible({ timeout: 1000 }).catch(() => false);
@@ -754,6 +837,28 @@ async function clickPlanUpgrade(page, planType) {
     }
 
     throw new Error(`未找到 ${plan} 套餐的升级按钮，请确认账号可升级且 Session 已登录`);
+}
+
+async function assertCheckoutPlan(page, planType) {
+    const plan = String(planType || 'plus').toLowerCase();
+    const expected = CHECKOUT_PLAN_HEADING[plan] || CHECKOUT_PLAN_HEADING.plus;
+    await page.waitForTimeout(800);
+    const headings = await page.getByRole('heading').allInnerTexts().catch(() => []);
+    const headingText = headings.map((item) => normalizeOptionText(item)).filter(Boolean).join(' | ');
+    const body = normalizeOptionText(await page.locator('body').innerText().catch(() => ''));
+
+    if (plan === 'plus' && /Go plan/i.test(headingText) && !/Plus plan/i.test(headingText)) {
+        throw new Error(`Checkout 打开的是 Go 套餐，不是 Plus（${headingText.slice(0, 120) || '无标题'}）`);
+    }
+    if (plan !== 'go' && /\bGo plan\b/i.test(headingText) && !expected.test(headingText)) {
+        throw new Error(`Checkout 套餐不匹配: 期望 ${plan}，页面是 ${headingText.slice(0, 120) || '无标题'}`);
+    }
+    if (!expected.test(headingText) && !expected.test(body)) {
+        console.warn(`[Warn] Checkout 未看到 ${plan} 标题（${headingText.slice(0, 80) || '无标题'}），继续支付前请人工确认`);
+        return false;
+    }
+    console.log(`✅ [步骤] Checkout 套餐已确认: ${plan}${headingText ? ` (${headingText.slice(0, 80)})` : ''}`);
+    return true;
 }
 
 async function waitForCheckoutPage(page, timeout = 90000) {
@@ -779,11 +884,28 @@ async function waitForCheckoutPage(page, timeout = 90000) {
 }
 
 async function openPricingCheckout(page, { region, planType }) {
-    await waitForPricingPage(page);
-    await switchToPersonalPlans(page);
-    await selectPricingRegion(page, region);
+    const maxRegionRounds = 2;
+    for (let round = 1; round <= maxRegionRounds; round += 1) {
+        await waitForPricingPage(page);
+        await switchToPersonalPlans(page);
+        try {
+            await selectPricingRegion(page, region);
+            break;
+        } catch (error) {
+            const failedRegion = /无法将定价页切换到目标地区/.test(String(error && error.message || error));
+            if (!failedRegion || round >= maxRegionRounds) {
+                throw error;
+            }
+            console.warn(`[Warn] 定价页无法切换到目标地区，刷新代理后重新打开定价页 (${round}/${maxRegionRounds})`);
+            const refreshed = await refreshAssignedProxyIp();
+            if (!refreshed) {
+                throw error;
+            }
+        }
+    }
     await clickPlanUpgrade(page, planType);
     const checkoutUrl = await waitForCheckoutPage(page);
+    await assertCheckoutPlan(page, planType);
     return checkoutUrl;
 }
 
@@ -796,5 +918,7 @@ module.exports = {
     clickPlanUpgrade,
     selectProUsageTierOnPricingPage,
     waitForCheckoutPage,
+    assertCheckoutPlan,
+    refreshAssignedProxyIp,
     pageShowsTargetRegionPricing
 };

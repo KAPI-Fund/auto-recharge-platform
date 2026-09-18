@@ -221,10 +221,60 @@ async function selectCheckoutUsageTier(page, planType) {
     return true;
 }
 
+async function findExactPaymentTab(page, label) {
+    const pattern = new RegExp(`^${label}$`, 'i');
+    const candidates = [
+        page.getByRole('tab', { name: pattern }),
+        page.getByRole('button', { name: pattern }),
+        page.getByRole('radio', { name: pattern })
+    ];
+    for (const locator of candidates) {
+        const el = locator.first();
+        if (await el.isVisible({ timeout: 400 }).catch(() => false)) {
+            return el;
+        }
+    }
+    return null;
+}
+
+async function isPaymentTabSelected(el) {
+    if (!el) {
+        return false;
+    }
+    const attrs = await Promise.all([
+        el.getAttribute('aria-selected').catch(() => null),
+        el.getAttribute('aria-pressed').catch(() => null),
+        el.getAttribute('data-state').catch(() => null),
+        el.getAttribute('aria-current').catch(() => null)
+    ]);
+    return attrs.some((value) => value === 'true' || value === 'active' || value === 'on');
+}
+
+/**
+ * 已有保存卡时 Checkout 会显示 Saved / Card，必须点 Card 才能填新卡。
+ */
+async function switchToNewCardIfSavedExists(page) {
+    const savedTab = await findExactPaymentTab(page, 'Saved');
+    const cardTab = await findExactPaymentTab(page, 'Card');
+    if (!savedTab || !cardTab) {
+        return false;
+    }
+    if (await isPaymentTabSelected(cardTab)) {
+        return true;
+    }
+    await cardTab.scrollIntoViewIfNeeded().catch(() => {});
+    await cardTab.click({ timeout: 8000 });
+    console.log('[Stripe] ✅ 检测到 Saved 与 Card，已切换到 Card 填写新卡');
+    await page.waitForTimeout(800);
+    return true;
+}
+
 async function prepareCheckoutCardSection(page) {
     await page.waitForURL(/checkout\/openai_llc|pay\.openai|checkout\.stripe|stripe\.com/i, { timeout: 5000 }).catch(() => {});
     await page.getByText(/Configure your plan|Card number|Pay with/i).first()
         .waitFor({ state: 'visible', timeout: 3000 }).catch(() => {});
+
+    await switchToNewCardIfSavedExists(page);
 
     const cardLabel = page.getByText(/^Card number$/i).first();
     if (await cardLabel.isVisible({ timeout: 800 }).catch(() => false)) {
@@ -570,7 +620,8 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {}) 
             }
             await page.waitForTimeout(800);
         } else {
-            console.log('[Stripe] OpenAI checkout 页面，跳过支付方式选择，直接填卡');
+            await switchToNewCardIfSavedExists(page);
+            console.log('[Stripe] OpenAI checkout 页面，已处理 Saved/Card，继续填卡');
         }
 
         console.log('[Stripe] Step 2: 填写信用卡字段（iframe 自动识别）...');
@@ -3078,6 +3129,7 @@ module.exports = {
     fillOpenAiCheckoutBilling,
     discoverCardInputs,
     prepareCheckoutCardSection,
+    switchToNewCardIfSavedExists,
     readCheckoutDueAmount,
     estimateTaxFreeAmount,
     waitForCheckoutTaxRecalculation,

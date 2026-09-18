@@ -848,6 +848,47 @@ func (s *Server) claimActiveProxyPayload(ctx context.Context, input map[string]a
 	return gin.H{"proxy": proxyURL, "proxy_url": proxyURL, "id": id, "logs": notes, "message": strings.Join(notes, "\n")}, nil
 }
 
+func (s *Server) internalRefreshLockedProxy(ctx context.Context, input map[string]any) (gin.H, error) {
+	id := firstNonEmpty(stringValue(input, "id"), stringValue(input, "proxyId"), stringValue(input, "proxyAssetId"))
+	if id == "" {
+		return nil, errInvalid("缺少代理 ID")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var row models.ProxyAsset
+	if err := s.DB.Where("id = ?", id).First(&row).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errInvalid("代理不存在")
+		}
+		return nil, err
+	}
+	refreshURL := strings.TrimSpace(row.RefreshURL)
+	if refreshURL == "" {
+		return gin.H{"ok": false, "refreshed": false, "message": "未配置刷新 URL"}, nil
+	}
+	timeout, wait, _, _ := s.proxyRefreshSettings()
+	client := &http.Client{Timeout: timeout}
+	if err := s.doProxyRefresh(ctx, client, refreshURL); err != nil {
+		_ = s.saveProxyRefreshResult(row.ID, false, err.Error())
+		return nil, fmt.Errorf("刷新代理 IP 失败: %w", err)
+	}
+	if wait > 0 {
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, fmt.Errorf("刷新后等待超时: %w", ctx.Err())
+		case <-timer.C:
+		}
+		timer.Stop()
+	}
+	if err := s.saveProxyRefreshResult(row.ID, true, ""); err != nil {
+		return nil, err
+	}
+	return gin.H{"ok": true, "refreshed": true, "message": "代理刷新 IP 成功"}, nil
+}
+
 func (s *Server) writeProxyClaimLogs(taskID string, notes []string) {
 	taskID = strings.TrimSpace(taskID)
 	for _, line := range notes {

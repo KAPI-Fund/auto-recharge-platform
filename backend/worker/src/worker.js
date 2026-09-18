@@ -244,6 +244,7 @@ function runLegacy({ taskId, jobKey, secret, taskContext = {}, config, workerId,
       PAYMENT_REGION_OVERRIDE: secret.region || "",
       PLAN_NAME_OVERRIDE: secret.planName || "",
       PROXY: secret.proxy || "",
+      PROXY_ASSET_ID: secret.proxyAssetId || secret.proxyId || "",
       HEADFUL: config.legacyHeadful ? "1" : "0",
       CHROMIUM_CHANNEL: config.chromiumChannel || "",
       CHECKOUT_MODE: config.checkoutMode || "api",
@@ -529,7 +530,7 @@ export class RechargeWorker {
             usedProxyIds.push(proxyId);
           }
           try {
-            const resultSecret = { ...secret, proxy: proxyURL };
+            const resultSecret = { ...secret, proxy: proxyURL, proxyAssetId: proxyId };
             const attemptResult = await runLegacy({
               taskId,
               jobKey: secret.jobKey || taskId,

@@ -144,6 +144,8 @@ func (s *Server) internalStore(c *gin.Context) {
 		payload, err = s.internalVerifyCDK(stringValue(input, "code"))
 	case "getActiveProxy":
 		payload, err = s.claimActiveProxyPayload(c.Request.Context(), input)
+	case "refreshProxy":
+		payload, err = s.internalRefreshLockedProxy(c.Request.Context(), input)
 	case "releaseProxy":
 		err = s.unlockProxyAsset(firstNonEmpty(stringValue(input, "id"), stringValue(input, "proxyId"), stringValue(input, "proxyAssetId")))
 		payload = gin.H{"ok": err == nil}

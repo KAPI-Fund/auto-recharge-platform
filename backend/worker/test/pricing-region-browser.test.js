@@ -104,3 +104,33 @@ test("Plus plan still uses the Plus upgrade button", async (t) => {
   assert.deepEqual(clicks, ["plus"]);
   await page.close();
 });
+
+test("Plus click does not hit Upgrade to Go when page title mentions ChatGPT Plus", async (t) => {
+  const browser = await launchRealBrowser();
+  t.after(async () => browser.close());
+  const page = await browser.newPage();
+
+  await page.setContent(`<!doctype html>
+    <html><body>
+      <h1>See what's new with ChatGPT Plus</h1>
+      <button type="button" role="tab">Personal</button>
+      <section data-plan="go">
+        <h2>ChatGPT Go</h2>
+        <button type="button" onclick="window.__clicks.push('go')">Upgrade to Go</button>
+      </section>
+      <section data-plan="plus">
+        <h2>ChatGPT Plus</h2>
+        <button type="button" onclick="window.__clicks.push('plus')">Rejoin Plus</button>
+      </section>
+      <section data-plan="pro">
+        <h2>ChatGPT Pro</h2>
+        <button type="button" onclick="window.__clicks.push('pro')">Upgrade to Pro</button>
+      </section>
+      <script>window.__clicks = [];</script>
+    </html>`);
+
+  await clickPlanUpgrade(page, "plus");
+  const clicks = await page.evaluate(() => window.__clicks);
+  assert.deepEqual(clicks, ["plus"]);
+  await page.close();
+});
